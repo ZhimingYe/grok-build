@@ -531,7 +531,7 @@ mod tests {
 
     #[test]
     fn reasoning_effort_options_falls_back_to_builtin_menu() {
-        // Supported but no server list falls back to today's four-row built-in menu
+        // Supported but no server list falls back to the built-in menu
         let state = state_with_meta(Some(serde_json::json!({
             "supportsReasoningEffort": true,
         })));
@@ -540,7 +540,7 @@ mod tests {
             .into_iter()
             .map(|o| o.id)
             .collect();
-        assert_eq!(ids, ["xhigh", "high", "medium", "low"]);
+        assert_eq!(ids, ["max", "xhigh", "high", "medium", "low"]);
     }
 
     #[test]
@@ -559,7 +559,11 @@ mod tests {
                 .into_iter()
                 .map(|o| o.id)
                 .collect();
-            assert_eq!(ids, ["xhigh", "high", "medium", "low"], "for meta {meta}");
+            assert_eq!(
+                ids,
+                ["max", "xhigh", "high", "medium", "low"],
+                "for meta {meta}"
+            );
         }
     }
 
@@ -718,12 +722,16 @@ mod tests {
 
     #[test]
     fn resolve_effort_token_legacy_menu_rejects_none() {
-        // supportsReasoningEffort without a server list means the built-in low..xhigh menu
+        // supportsReasoningEffort without a server list means the built-in low..max menu
         let state = state_with_meta(Some(serde_json::json!({
             "supportsReasoningEffort": true,
         })));
         assert!(state.resolve_effort_token("none").is_none());
         assert!(state.resolve_effort_token("minimal").is_none());
+        assert_eq!(
+            state.resolve_effort_token("max"),
+            Some(ReasoningEffort::Max)
+        );
         assert_eq!(
             state.resolve_effort_token("low"),
             Some(ReasoningEffort::Low)

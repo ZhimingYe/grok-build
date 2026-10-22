@@ -4,12 +4,13 @@ use xai_grok_sampling_types::{ReasoningEffort, ReasoningEffortOption, effort_lab
 
 use crate::session::unified_list::SessionKind;
 
-pub(crate) const SELECTABLE_REASONING_EFFORTS: [ReasoningEffort; 5] = [
+pub(crate) const SELECTABLE_REASONING_EFFORTS: [ReasoningEffort; 6] = [
     ReasoningEffort::Minimal,
     ReasoningEffort::Low,
     ReasoningEffort::Medium,
     ReasoningEffort::High,
     ReasoningEffort::Xhigh,
+    ReasoningEffort::Max,
 ];
 
 pub(crate) const CONFIG_ID_MODEL: &str = "model";
@@ -55,7 +56,6 @@ impl GrokSessionDetail {
 }
 
 /// The built-in session-picker modes used when the model has no server list.
-/// Reproduces the historical five rows and their labels.
 pub(crate) fn legacy_session_effort_options() -> Vec<ReasoningEffortOption> {
     SELECTABLE_REASONING_EFFORTS
         .iter()
@@ -198,7 +198,7 @@ mod tests {
             &models,
             &current,
             &legacy_session_effort_options(),
-            Some(ReasoningEffort::High),
+            Some(ReasoningEffort::Max),
         );
 
         let model_opts: Vec<_> = opts.iter().filter(|o| o.category == "model").collect();
@@ -217,8 +217,8 @@ mod tests {
         let Some(selected_mode) = selected_modes.first() else {
             panic!("expected one selected mode: {selected_modes:?}");
         };
-        assert_eq!(selected_mode.id, "high");
-        assert_eq!(selected_mode.label, "High");
+        assert_eq!(selected_mode.id, "max");
+        assert_eq!(selected_mode.label, "Max");
     }
 
     #[test]

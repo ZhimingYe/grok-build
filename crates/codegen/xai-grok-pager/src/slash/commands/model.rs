@@ -495,7 +495,7 @@ mod tests {
             .expect("effort rows after a committed window");
         assert_eq!(
             items.first().map(|item| item.insert_text.as_str()),
-            Some("Grok 4.7 500k xhigh")
+            Some("Grok 4.7 500k max")
         );
 
         // A partial that can't start any window row falls back to the effort rows
@@ -720,21 +720,22 @@ mod tests {
             current_title: None,
         };
         // The args query has a trailing space, so this is the effort phase
-        // Items come out ordered xhigh to low (strongest first) per EFFORT_LEVELS
+        // Items come out ordered max to low (strongest first) per EFFORT_LEVELS
         let items = cmd.suggest_args(&ctx, "Reasoning X ").unwrap();
-        assert_eq!(items.len(), 4);
-        let [a, b, c, d] = items.as_slice() else {
-            panic!("expected 4 items: {items:?}");
+        assert_eq!(items.len(), 5);
+        let [a, b, c, d, e] = items.as_slice() else {
+            panic!("expected 5 items: {items:?}");
         };
-        assert_eq!(a.insert_text, "Reasoning X xhigh");
-        assert_eq!(b.insert_text, "Reasoning X high");
-        assert_eq!(c.insert_text, "Reasoning X medium");
-        assert_eq!(d.insert_text, "Reasoning X low");
+        assert_eq!(a.insert_text, "Reasoning X max");
+        assert_eq!(b.insert_text, "Reasoning X xhigh");
+        assert_eq!(c.insert_text, "Reasoning X high");
+        assert_eq!(d.insert_text, "Reasoning X medium");
+        assert_eq!(e.insert_text, "Reasoning X low");
         // Display is just the level so the user sees a clean column.
-        assert_eq!(a.display, "xhigh");
+        assert_eq!(a.display, "max");
         // match_text carries the sort-key prefix that forces the matcher's alphabetical tiebreak to render rows in EFFORT_LEVELS order
         assert!(a.match_text.starts_with("a "));
-        assert!(d.match_text.starts_with("d "));
+        assert!(e.match_text.starts_with("e "));
     }
 
     #[test]
@@ -764,7 +765,7 @@ mod tests {
         // The preselection must name a row `suggest_args` actually builds, or the consumers fall back to row 0
         let high_row = cmd
             .suggest_args(&ctx, "Reasoning X ")
-            .and_then(|items| items.get(1).map(|item| item.insert_text.clone()));
+            .and_then(|items| items.get(2).map(|item| item.insert_text.clone()));
         assert_eq!(Some("Reasoning X high".to_owned()), high_row);
         assert_eq!(high_row, cmd.preselected_arg(&ctx, "Reasoning X "));
         assert_eq!(None, cmd.preselected_arg(&ctx, "Reasoning X h"));
@@ -792,7 +793,7 @@ mod tests {
         };
         // Still in effort phase; the matcher upstream narrows to high and xhigh
         let items = cmd.suggest_args(&ctx, "Reasoning X h").unwrap();
-        assert_eq!(items.len(), 4);
+        assert_eq!(items.len(), 5);
     }
 
     #[test]
