@@ -137,7 +137,7 @@ mod tests {
             CommandResult::Error(msg) => {
                 assert!(msg.contains("Usage: /effort"));
                 // Legacy menu option ids only, not none/minimal
-                assert!(msg.contains("xhigh|high|medium|low"), "msg={msg}");
+                assert!(msg.contains("max|xhigh|high|medium|low"), "msg={msg}");
                 assert!(msg.contains("current: medium"));
                 assert!(!msg.contains("none"));
                 assert!(!msg.contains("minimal"));
@@ -173,13 +173,13 @@ mod tests {
         state.available.insert(id.clone(), info);
         state.current = Some(id.clone());
         let mut ctx = dummy_exec_ctx(&state);
-        let result = EffortCommand.run(&mut ctx, "high");
+        let result = EffortCommand.run(&mut ctx, "max");
         match result {
             CommandResult::Action(Action::SwitchModel(ModelChoice {
                 model_id, effort, ..
             })) => {
                 assert_eq!(model_id, id);
-                assert_eq!(effort, Some(ReasoningEffort::High));
+                assert_eq!(effort, Some(ReasoningEffort::Max));
             }
             other => panic!("expected SwitchModel with effort, got {other:?}"),
         }
@@ -187,7 +187,7 @@ mod tests {
 
     #[test]
     fn none_and_minimal_rejected_when_model_menu_omits_them() {
-        // The legacy fallback menu is low..xhigh; `none`/`minimal` used to pass through and 400 on grok-4.5, so reject at the TUI instead
+        // The fallback menu is low..max; `none`/`minimal` used to pass through and 400 on grok-4.5, so reject at the TUI instead
         let mut state = ModelState::default();
         let (id, info) = model_with_reasoning("reasoning-x", "Reasoning X");
         state.available.insert(id.clone(), info);
@@ -358,16 +358,17 @@ mod tests {
         };
         let items = cmd.suggest_args(&ctx, "").unwrap();
         assert_eq!(items.len(), EFFORT_LEVELS.len());
-        let [a, b, c, d] = items.as_slice() else {
-            panic!("expected 4 items: {items:?}");
+        let [a, b, c, d, e] = items.as_slice() else {
+            panic!("expected 5 items: {items:?}");
         };
-        assert_eq!(a.insert_text, "xhigh");
-        assert_eq!(b.insert_text, "high");
-        assert_eq!(b.display, "high (active)");
-        assert_eq!(c.insert_text, "medium");
-        assert_eq!(d.insert_text, "low");
+        assert_eq!(a.insert_text, "max");
+        assert_eq!(b.insert_text, "xhigh");
+        assert_eq!(c.insert_text, "high");
+        assert_eq!(c.display, "high (active)");
+        assert_eq!(d.insert_text, "medium");
+        assert_eq!(e.insert_text, "low");
         assert!(a.match_text.starts_with("a "));
-        assert!(d.match_text.starts_with("d "));
+        assert!(e.match_text.starts_with("e "));
     }
 
     #[test]

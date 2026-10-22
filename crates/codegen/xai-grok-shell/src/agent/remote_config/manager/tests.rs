@@ -729,6 +729,48 @@ fn rebuild_updates_models_and_available() {
     );
 }
 #[test]
+fn max_effort_fallback_preserves_explicit_model_limits() {
+    let cfg = config::Config {
+        reasoning_effort_override: Some(ReasoningEffort::Max),
+        ..config::Config::default()
+    };
+    let mut prefetched = IndexMap::new();
+    let mut fallback = make_model_entry("reasoning-model");
+    fallback.info.supports_reasoning_effort = true;
+    prefetched.insert("reasoning-model".to_string(), fallback);
+    let mut limited = make_model_entry("limited-model");
+    limited.info.supports_reasoning_effort = true;
+    limited.info.reasoning_effort = Some(ReasoningEffort::High);
+    limited.info.reasoning_efforts =
+        vec![serde_json::from_value(serde_json::json!("high")).unwrap()];
+    prefetched.insert("limited-model".to_string(), limited);
+    prefetched.insert("plain-model".to_string(), make_model_entry("plain-model"));
+
+    let catalog = resolve_model_catalog(&cfg, Some(prefetched));
+    assert_eq!(
+        catalog["reasoning-model"].info.reasoning_effort,
+        Some(ReasoningEffort::Max)
+    );
+    assert_eq!(
+        catalog["limited-model"].info.reasoning_effort,
+        Some(ReasoningEffort::High)
+    );
+    assert_eq!(catalog["plain-model"].info.reasoning_effort, None);
+
+    let mgr = test_manager();
+    mgr.rebuild(&cfg, Some(catalog));
+    for effort in [
+        ReasoningEffort::Low,
+        ReasoningEffort::High,
+        ReasoningEffort::Max,
+    ] {
+        assert!(mgr.model_supports_reasoning_effort_value("reasoning-model", effort));
+    }
+    assert!(!mgr.model_supports_reasoning_effort_value("limited-model", ReasoningEffort::Max));
+    assert!(!mgr.model_supports_reasoning_effort_value("plain-model", ReasoningEffort::Max));
+}
+
+#[test]
 fn current_reasoning_effort_round_trip() {
     let mgr = test_manager();
     assert_eq!(mgr.current_reasoning_effort(), None);

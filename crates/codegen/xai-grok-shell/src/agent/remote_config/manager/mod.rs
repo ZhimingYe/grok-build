@@ -581,6 +581,7 @@ impl ModelsManager {
                         | ReasoningEffort::Medium
                         | ReasoningEffort::High
                         | ReasoningEffort::Xhigh
+                        | ReasoningEffort::Max
                 );
         }
         options.iter().any(|option| option.value == effort)
