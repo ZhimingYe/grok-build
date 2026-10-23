@@ -18,7 +18,9 @@ pub struct Config {
     pub client: &'static str,
     pub client_version: &'static str,
     pub release: &'static str,
-    /// When `true`, [`init`] returns a no-op guard regardless of `SENTRY_DSN`.
+    // ZMY SELF-ADDED CODE START
+    /// When `true`, [`init`] returns `None` regardless of `SENTRY_DSN`.
+    // ZMY SELF-ADDED CODE END
     pub disabled: bool,
 }
 
@@ -28,13 +30,22 @@ static CONFIG: OnceLock<Config> = OnceLock::new();
 
 /// Init Sentry and apply the process-wide scope tags.
 /// Call once at process start; the returned guard must outlive the process.
-/// Returns a no-op guard when `config.disabled`.
-pub fn init(config: Config) -> ClientInitGuard {
+// ZMY SELF-ADDED CODE START
+/// Returns `None` when `config.disabled` or error reporting is withheld.
+// ZMY SELF-ADDED CODE END
+// ZMY SELF-ADDED CODE START
+pub fn init(config: Config) -> Option<ClientInitGuard> {
+// ZMY SELF-ADDED CODE END
     let config = CONFIG.get_or_init(|| config);
 
-    if config.disabled {
-        return sentry::init(ClientOptions::default());
+    // ZMY SELF-ADDED CODE START
+    if config.disabled
+        || !xai_grok_config::Distribution::current()
+            .allows(xai_grok_config::Capability::ErrorReporting)
+    {
+        return None;
     }
+    // ZMY SELF-ADDED CODE END
 
     let dsn = std::env::var("SENTRY_DSN")
         .ok()
@@ -64,7 +75,9 @@ pub fn init(config: Config) -> ClientInitGuard {
         scope.set_tag("arch", std::env::consts::ARCH);
     });
 
-    guard
+    // ZMY SELF-ADDED CODE START
+    Some(guard)
+    // ZMY SELF-ADDED CODE END
 }
 
 /// Flush in-flight events. Call before `std::process::exit` in signal handlers.

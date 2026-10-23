@@ -226,6 +226,19 @@ pub fn print_update_status(status: &UpdateStatus, json: bool) -> anyhow::Result<
 }
 
 pub async fn check_update_status(update_config: &UpdateConfig) -> UpdateStatus {
+    // ZMY SELF-ADDED CODE START
+    if !crate::updates_enabled() {
+        return UpdateStatus {
+            current_version: get_installed_grok_version(),
+            latest_version: None,
+            update_available: false,
+            installer: None,
+            channel: update_config.channel.clone(),
+            auto_update: Some(false),
+            error: Some(crate::UPDATES_DISABLED_MESSAGE.into()),
+        };
+    }
+    // ZMY SELF-ADDED CODE END
     let installer = get_installer().await.map(|value| value.to_string());
     let current_version = get_installed_grok_version();
     let current_config = config::load_config().await;
@@ -379,6 +392,11 @@ async fn fetch_update_plan(
 /// `None` means stay put.
 /// Gates on the installer (via `installer_allows_downgrade`) so npm is never downgraded; the decision depends on the installer, never the caller.
 pub async fn auto_update_target(update_config: &UpdateConfig) -> Option<(&'static str, String)> {
+    // ZMY SELF-ADDED CODE START
+    if !crate::updates_enabled() {
+        return None;
+    }
+    // ZMY SELF-ADDED CODE END
     let installer = get_installer().await?;
     if installer == WINGET {
         return None;
@@ -415,6 +433,14 @@ pub struct EnsureLatestOutcome {
 /// another process (TUI background download, explicit `grok update`) is reused as-is. On Windows a busy leader therefore
 /// still re-downloads hourly; only the symlink layout can prove the disk is current without exec'ing the binary.
 pub async fn ensure_latest_on_disk(update_config: &UpdateConfig) -> Result<EnsureLatestOutcome> {
+    // ZMY SELF-ADDED CODE START
+    if !crate::updates_enabled() {
+        return Ok(EnsureLatestOutcome {
+            installed: None,
+            relaunch_needed: false,
+        });
+    }
+    // ZMY SELF-ADDED CODE END
     let _ensure_span = xai_grok_telemetry::region!(
         "update.ensure_latest",
         xai_grok_telemetry::region::Parent::Inherit
@@ -625,6 +651,11 @@ impl BackgroundUpdateCheck {
 /// binary is older than the channel pointer. If `auto_update` is enabled and the on-disk install is also behind the
 /// pointer, kicks off a download (a detached `grok update` child). Only the restart hint is shown.
 pub async fn check_update_background(update_config: &UpdateConfig) -> BackgroundUpdateCheck {
+    // ZMY SELF-ADDED CODE START
+    if !crate::updates_enabled() {
+        return BackgroundUpdateCheck::none();
+    }
+    // ZMY SELF-ADDED CODE END
     let Some(installer) = get_installer().await else {
         return BackgroundUpdateCheck::none();
     };
@@ -714,6 +745,11 @@ pub async fn run_update_if_available(
     trigger: CliUpdateTrigger,
     update_config: &UpdateConfig,
 ) -> Result<bool> {
+    // ZMY SELF-ADDED CODE START
+    if !crate::updates_enabled() {
+        return Ok(false);
+    }
+    // ZMY SELF-ADDED CODE END
     let Some(inst) = get_installer().await else {
         return Ok(false);
     };
@@ -2565,6 +2601,11 @@ pub async fn run_update(
     update_config: &mut UpdateConfig,
     trigger: CliUpdateTrigger,
 ) -> Result<Option<String>> {
+    // ZMY SELF-ADDED CODE START
+    if !crate::updates_enabled() {
+        anyhow::bail!(crate::UPDATES_DISABLED_MESSAGE);
+    }
+    // ZMY SELF-ADDED CODE END
     let installer = get_installer().await;
     let policy = config::VersionPolicy::resolve();
     if let Some(version) = pinned_version

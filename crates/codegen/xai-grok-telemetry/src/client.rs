@@ -273,6 +273,13 @@ pub const RESERVED_EVENT_KEYS: &[&str] = &[
 ];
 /// Core telemetry emitter. Routes to product events and Mixpanel.
 pub async fn track(event_name: &str, request_id: &str, ctx: &UserContext, mut metadata: Metadata) {
+    // ZMY SELF-ADDED CODE START
+    if !xai_grok_config::Distribution::current()
+        .allows(xai_grok_config::Capability::Telemetry)
+    {
+        return;
+    }
+    // ZMY SELF-ADDED CODE END
     let lock = TELEMETRY_CLIENT.get_or_init(|| Mutex::new(None));
     let client = {
         let guard = lock.lock().unwrap_or_else(|err| err.into_inner());
@@ -373,6 +380,13 @@ pub fn current_mode() -> Option<TelemetryMode> {
 /// Sync the user's Mixpanel profile once per init. Fire-and-forget. Only runs in [`TelemetryMode::Enabled`].
 /// SessionMetrics mode may emit lifecycle events via [`track`], but must not write Mixpanel people profiles (`engage`).
 pub fn sync_profile() {
+    // ZMY SELF-ADDED CODE START
+    if !xai_grok_config::Distribution::current()
+        .allows(xai_grok_config::Capability::Telemetry)
+    {
+        return;
+    }
+    // ZMY SELF-ADDED CODE END
     let lock = TELEMETRY_CLIENT.get_or_init(|| Mutex::new(None));
     let client = {
         let guard = lock.lock().unwrap_or_else(|err| err.into_inner());
@@ -426,6 +440,14 @@ pub fn init(
     subscription_tier: Option<String>,
     http_client: reqwest::Client,
 ) {
+    // ZMY SELF-ADDED CODE START
+    let mut mode = mode;
+    if !xai_grok_config::Distribution::current()
+        .allows(xai_grok_config::Capability::Telemetry)
+    {
+        mode = TelemetryMode::Disabled;
+    }
+    // ZMY SELF-ADDED CODE END
     let lock = TELEMETRY_CLIENT.get_or_init(|| Mutex::new(None));
     let mut guard = lock.lock().unwrap_or_else(|err| err.into_inner());
     *guard = if mode.is_disabled() {
@@ -459,6 +481,14 @@ pub fn init_if_needed(
     subscription_tier: Option<String>,
     http_client: reqwest::Client,
 ) {
+    // ZMY SELF-ADDED CODE START
+    let mut mode = mode;
+    if !xai_grok_config::Distribution::current()
+        .allows(xai_grok_config::Capability::Telemetry)
+    {
+        mode = TelemetryMode::Disabled;
+    }
+    // ZMY SELF-ADDED CODE END
     if mode.is_disabled() {
         return;
     }
@@ -484,6 +514,9 @@ pub fn init_if_needed(
 #[cfg(test)]
 mod tests {
     use super::*;
+    // ZMY SELF-ADDED CODE START
+    static TEST_CLIENT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // ZMY SELF-ADDED CODE END
     /// Shell events must still strip to their bare suffix, byte-for-byte identical to the previous `strip_prefix("grok-shell-")` behavior.
     #[test]
     fn event_value_strips_shell_prefix() {
@@ -498,9 +531,11 @@ mod tests {
     fn event_value_strips_workspace_prefix() {
         assert_eq!(event_value("grok-workspace-turn"), "turn");
     }
-    /// SessionMetrics must not attempt Mixpanel profile engage; sync_profile is a no-op unless mode is fully Enabled.
+    // ZMY SELF-ADDED CODE START
+    /// The fork withholds telemetry even when SessionMetrics is requested.
     #[test]
-    fn sync_profile_is_noop_in_session_metrics_mode() {
+    fn fork_telemetry_stays_disabled_for_session_metrics_mode() {
+        let _test_lock = TEST_CLIENT_LOCK.lock().unwrap();
         assert!(
             tokio::runtime::Handle::try_current().is_err(),
             "this test must run without a tokio runtime"
@@ -532,12 +567,44 @@ mod tests {
             reqwest::Client::new(),
         );
         sync_profile();
-        assert!(
-            is_session_metrics_enabled(),
-            "client must be live for session metrics"
-        );
-        assert!(!is_enabled(), "product analytics must stay off");
+        assert!(!is_session_metrics_enabled());
+        assert!(!is_enabled());
     }
+    // ZMY SELF-ADDED CODE END
+    // ZMY SELF-ADDED CODE START
+    #[test]
+    fn fork_telemetry_stays_disabled_when_enabled_sinks_are_requested() {
+        let _test_lock = TEST_CLIENT_LOCK.lock().unwrap();
+        struct ClearClient;
+        impl Drop for ClearClient {
+            fn drop(&mut self) {
+                let lock = TELEMETRY_CLIENT.get_or_init(|| Mutex::new(None));
+                *lock.lock().unwrap_or_else(|err| err.into_inner()) = None;
+            }
+        }
+        let _clear = ClearClient;
+        let cfg = TelemetryConfig {
+            mixpanel_enabled: true,
+            mixpanel_token: Some("explicit-test-token".into()),
+            events_url: Some("http://127.0.0.1:9/events".into()),
+            events_api_key: Some("explicit-test-key".into()),
+            ..TelemetryConfig::default()
+        };
+        init(
+            cfg,
+            TelemetryMode::Enabled,
+            Some("user-1".into()),
+            None,
+            None,
+            None,
+            "0.0.0-test".into(),
+            None,
+            reqwest::Client::new(),
+        );
+        assert!(!is_enabled());
+        assert!(!is_session_metrics_enabled());
+    }
+    // ZMY SELF-ADDED CODE END
     /// Names without a known emitter prefix pass through unchanged.
     #[test]
     fn event_value_passes_through_unprefixed() {

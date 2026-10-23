@@ -365,6 +365,11 @@ async fn fetch_gcs_channel_pointer(channel: &str, base_url: &str) -> Result<Stri
 /// Use this when the caller needs to control when the cache is written.
 /// Auto-update, for example, should only cache after a successful install or when no update is needed.
 pub async fn fetch_latest_version(installer: &str, config: &UpdateConfig) -> Result<String> {
+    // ZMY SELF-ADDED CODE START
+    if !crate::updates_enabled() {
+        anyhow::bail!(crate::UPDATES_DISABLED_MESSAGE);
+    }
+    // ZMY SELF-ADDED CODE END
     match installer {
         "npm" => fetch_npm_version(&config.channel, config.npm_registry.as_deref()).await,
         "gh-release" => fetch_gh_release_version(&config.channel).await,
@@ -471,6 +476,11 @@ pub(crate) fn version_from_versioned_binary_name(name: &str, bin_prefix: &str) -
 /// entire operation is capped at 500 ms to keep startup and post-install paths fast. The stable pointer is only used to
 /// derive the `[alpha]`/`[stable]` channel label; it is never required for correctness.
 pub(crate) async fn try_fetch_stable_pointer() -> Option<String> {
+    // ZMY SELF-ADDED CODE START
+    if !crate::updates_enabled() {
+        return None;
+    }
+    // ZMY SELF-ADDED CODE END
     tokio::time::timeout(Duration::from_millis(500), async {
         for base in cli_base_urls() {
             if let Ok(v) = fetch_gcs_channel_pointer("stable", &base).await {

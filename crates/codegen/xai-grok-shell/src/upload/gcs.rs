@@ -100,6 +100,13 @@ pub(crate) async fn upload_to_auth_diagnostics(
     upload_method: &crate::session::repo_changes::UploadMethod,
     auth_manager: Arc<xai_grok_login::AuthManager>,
 ) {
+    // ZMY SELF-ADDED CODE START
+    if !xai_grok_config::Distribution::current()
+        .allows(xai_grok_config::Capability::Telemetry)
+    {
+        return;
+    }
+    // ZMY SELF-ADDED CODE END
     let user_id = user_id.replace('/', "_");
     let ts = chrono::Utc::now().timestamp_millis();
     let version = xai_grok_version::VERSION;

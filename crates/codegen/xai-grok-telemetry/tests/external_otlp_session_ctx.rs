@@ -23,6 +23,19 @@ async fn ambient_ctx_injects_session_turn_and_prompt_id() {
         app_entrypoint: "cli".into(),
     };
     external::init(Some(cfg));
+    // ZMY SELF-ADDED CODE START
+    if !xai_grok_config::Distribution::current()
+        .allows(xai_grok_config::Capability::Telemetry)
+    {
+        assert!(!external::is_active());
+        tokio::task::spawn_blocking(external::flush).await.unwrap();
+        tokio::task::spawn_blocking(external::shutdown)
+            .await
+            .unwrap();
+        assert!(server.recorder().exports().is_empty());
+        return;
+    }
+    // ZMY SELF-ADDED CODE END
     assert!(external::is_active());
 
     let ctx = xai_grok_telemetry::TelemetryCtx::new(
