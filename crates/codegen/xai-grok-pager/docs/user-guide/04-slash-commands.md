@@ -106,7 +106,9 @@ Switch models. Accepts a model ID or display name (case-insensitive). When the m
 
 ### `/effort <level>`
 
+<!-- ZMY SELF-ADDED CODE START -->
 Set reasoning effort on the **current** model without reselecting it. When the model does not advertise its own levels, the choices are `low`, `medium`, `high`, `xhigh`, and `max`. If the model advertises a level list, only those levels are offered. This only applies when the active model supports reasoning effort. `max` is sent unchanged (for example, as `{"reasoning_effort": "max"}` on the Chat Completions API), not mapped to `xhigh`.
+<!-- ZMY SELF-ADDED CODE END -->
 
 ```
 /effort high

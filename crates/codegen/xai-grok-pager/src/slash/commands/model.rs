@@ -493,10 +493,12 @@ mod tests {
         let items = cmd
             .suggest_args(&ctx, "Grok 4.7 500k ")
             .expect("effort rows after a committed window");
+        // ZMY SELF-ADDED CODE START
         assert_eq!(
             items.first().map(|item| item.insert_text.as_str()),
             Some("Grok 4.7 500k max")
         );
+        // ZMY SELF-ADDED CODE END
 
         // A partial that can't start any window row falls back to the effort rows
         let items = cmd
@@ -720,6 +722,7 @@ mod tests {
             current_title: None,
         };
         // The args query has a trailing space, so this is the effort phase
+        // ZMY SELF-ADDED CODE START
         // Items come out ordered max to low (strongest first) per EFFORT_LEVELS
         let items = cmd.suggest_args(&ctx, "Reasoning X ").unwrap();
         assert_eq!(items.len(), 5);
@@ -736,6 +739,7 @@ mod tests {
         // match_text carries the sort-key prefix that forces the matcher's alphabetical tiebreak to render rows in EFFORT_LEVELS order
         assert!(a.match_text.starts_with("a "));
         assert!(e.match_text.starts_with("e "));
+        // ZMY SELF-ADDED CODE END
     }
 
     #[test]
@@ -763,9 +767,11 @@ mod tests {
             current_title: None,
         };
         // The preselection must name a row `suggest_args` actually builds, or the consumers fall back to row 0
+        // ZMY SELF-ADDED CODE START
         let high_row = cmd
             .suggest_args(&ctx, "Reasoning X ")
             .and_then(|items| items.get(2).map(|item| item.insert_text.clone()));
+        // ZMY SELF-ADDED CODE END
         assert_eq!(Some("Reasoning X high".to_owned()), high_row);
         assert_eq!(high_row, cmd.preselected_arg(&ctx, "Reasoning X "));
         assert_eq!(None, cmd.preselected_arg(&ctx, "Reasoning X h"));
@@ -793,7 +799,9 @@ mod tests {
         };
         // Still in effort phase; the matcher upstream narrows to high and xhigh
         let items = cmd.suggest_args(&ctx, "Reasoning X h").unwrap();
+        // ZMY SELF-ADDED CODE START
         assert_eq!(items.len(), 5);
+        // ZMY SELF-ADDED CODE END
     }
 
     #[test]

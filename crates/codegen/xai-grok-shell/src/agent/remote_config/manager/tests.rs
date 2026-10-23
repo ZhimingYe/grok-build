@@ -728,6 +728,7 @@ fn rebuild_updates_models_and_available() {
         "models should be populated after rebuild"
     );
 }
+// ZMY SELF-ADDED CODE START
 #[test]
 fn max_effort_fallback_preserves_explicit_model_limits() {
     let cfg = config::Config {
@@ -770,6 +771,7 @@ fn max_effort_fallback_preserves_explicit_model_limits() {
     assert!(!mgr.model_supports_reasoning_effort_value("plain-model", ReasoningEffort::Max));
 }
 
+// ZMY SELF-ADDED CODE END
 #[test]
 fn current_reasoning_effort_round_trip() {
     let mgr = test_manager();

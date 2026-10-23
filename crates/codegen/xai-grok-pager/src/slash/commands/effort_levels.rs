@@ -6,6 +6,7 @@ use crate::slash::command::ArgItem;
 
 /// Effort levels in the built-in fallback menu (strongest first).
 /// `none`/`minimal` are still accepted by `ReasoningEffort::from_str` for power users.
+// ZMY SELF-ADDED CODE START
 pub(crate) const EFFORT_LEVELS: &[ReasoningEffort] = &[
     ReasoningEffort::Max,
     ReasoningEffort::Xhigh,
@@ -13,6 +14,7 @@ pub(crate) const EFFORT_LEVELS: &[ReasoningEffort] = &[
     ReasoningEffort::Medium,
     ReasoningEffort::Low,
 ];
+// ZMY SELF-ADDED CODE END
 
 pub(crate) fn effort_description(level: ReasoningEffort) -> &'static str {
     match level {
@@ -26,9 +28,11 @@ pub(crate) fn effort_description(level: ReasoningEffort) -> &'static str {
     }
 }
 
+// ZMY SELF-ADDED CODE START
 /// The built-in menu used when the server sends no `reasoningEfforts`.
 /// Labels are the lowercase level (via `Display`), descriptions from `effort_description`.
 /// The active row is matched by value against the session effort at render time, so `default` is left unset here.
+// ZMY SELF-ADDED CODE END
 pub(crate) fn legacy_effort_options() -> Vec<ReasoningEffortOption> {
     EFFORT_LEVELS
         .iter()

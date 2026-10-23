@@ -531,6 +531,7 @@ mod tests {
 
     #[test]
     fn reasoning_effort_options_falls_back_to_builtin_menu() {
+        // ZMY SELF-ADDED CODE START
         // Supported but no server list falls back to the built-in menu
         let state = state_with_meta(Some(serde_json::json!({
             "supportsReasoningEffort": true,
@@ -541,6 +542,7 @@ mod tests {
             .map(|o| o.id)
             .collect();
         assert_eq!(ids, ["max", "xhigh", "high", "medium", "low"]);
+        // ZMY SELF-ADDED CODE END
     }
 
     #[test]
@@ -559,11 +561,13 @@ mod tests {
                 .into_iter()
                 .map(|o| o.id)
                 .collect();
+            // ZMY SELF-ADDED CODE START
             assert_eq!(
                 ids,
                 ["max", "xhigh", "high", "medium", "low"],
                 "for meta {meta}"
             );
+            // ZMY SELF-ADDED CODE END
         }
     }
 
@@ -722,16 +726,20 @@ mod tests {
 
     #[test]
     fn resolve_effort_token_legacy_menu_rejects_none() {
+        // ZMY SELF-ADDED CODE START
         // supportsReasoningEffort without a server list means the built-in low..max menu
+        // ZMY SELF-ADDED CODE END
         let state = state_with_meta(Some(serde_json::json!({
             "supportsReasoningEffort": true,
         })));
         assert!(state.resolve_effort_token("none").is_none());
         assert!(state.resolve_effort_token("minimal").is_none());
+        // ZMY SELF-ADDED CODE START
         assert_eq!(
             state.resolve_effort_token("max"),
             Some(ReasoningEffort::Max)
         );
+        // ZMY SELF-ADDED CODE END
         assert_eq!(
             state.resolve_effort_token("low"),
             Some(ReasoningEffort::Low)

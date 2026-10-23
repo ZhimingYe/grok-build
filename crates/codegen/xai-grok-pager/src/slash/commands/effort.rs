@@ -137,7 +137,9 @@ mod tests {
             CommandResult::Error(msg) => {
                 assert!(msg.contains("Usage: /effort"));
                 // Legacy menu option ids only, not none/minimal
+                // ZMY SELF-ADDED CODE START
                 assert!(msg.contains("max|xhigh|high|medium|low"), "msg={msg}");
+                // ZMY SELF-ADDED CODE END
                 assert!(msg.contains("current: medium"));
                 assert!(!msg.contains("none"));
                 assert!(!msg.contains("minimal"));
@@ -173,6 +175,7 @@ mod tests {
         state.available.insert(id.clone(), info);
         state.current = Some(id.clone());
         let mut ctx = dummy_exec_ctx(&state);
+        // ZMY SELF-ADDED CODE START
         let result = EffortCommand.run(&mut ctx, "max");
         match result {
             CommandResult::Action(Action::SwitchModel(ModelChoice {
@@ -183,11 +186,14 @@ mod tests {
             }
             other => panic!("expected SwitchModel with effort, got {other:?}"),
         }
+        // ZMY SELF-ADDED CODE END
     }
 
     #[test]
     fn none_and_minimal_rejected_when_model_menu_omits_them() {
+        // ZMY SELF-ADDED CODE START
         // The fallback menu is low..max; `none`/`minimal` used to pass through and 400 on grok-4.5, so reject at the TUI instead
+        // ZMY SELF-ADDED CODE END
         let mut state = ModelState::default();
         let (id, info) = model_with_reasoning("reasoning-x", "Reasoning X");
         state.available.insert(id.clone(), info);
@@ -357,6 +363,7 @@ mod tests {
             current_title: None,
         };
         let items = cmd.suggest_args(&ctx, "").unwrap();
+        // ZMY SELF-ADDED CODE START
         assert_eq!(items.len(), EFFORT_LEVELS.len());
         let [a, b, c, d, e] = items.as_slice() else {
             panic!("expected 5 items: {items:?}");
@@ -369,6 +376,7 @@ mod tests {
         assert_eq!(e.insert_text, "low");
         assert!(a.match_text.starts_with("a "));
         assert!(e.match_text.starts_with("e "));
+        // ZMY SELF-ADDED CODE END
     }
 
     #[test]

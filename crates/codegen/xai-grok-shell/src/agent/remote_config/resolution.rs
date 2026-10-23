@@ -443,6 +443,7 @@ fn model_offers_reasoning_effort(info: &config::ModelInfo, effort: ReasoningEffo
         return false;
     }
     if info.reasoning_efforts.is_empty() {
+        // ZMY SELF-ADDED CODE START
         matches!(
             effort,
             ReasoningEffort::Low
@@ -451,6 +452,7 @@ fn model_offers_reasoning_effort(info: &config::ModelInfo, effort: ReasoningEffo
                 | ReasoningEffort::Xhigh
                 | ReasoningEffort::Max
         )
+        // ZMY SELF-ADDED CODE END
     } else {
         info.reasoning_efforts.iter().any(|opt| opt.value == effort)
     }
