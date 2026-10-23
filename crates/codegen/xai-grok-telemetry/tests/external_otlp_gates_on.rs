@@ -58,6 +58,19 @@ async fn external_stream_gates_on_end_to_end() {
     };
 
     external::init(Some(cfg));
+    // ZMY SELF-ADDED CODE START
+    if !xai_grok_config::Distribution::current()
+        .allows(xai_grok_config::Capability::Telemetry)
+    {
+        assert!(!external::is_active());
+        tokio::task::spawn_blocking(external::flush).await.unwrap();
+        tokio::task::spawn_blocking(external::shutdown)
+            .await
+            .unwrap();
+        assert!(server.recorder().exports().is_empty());
+        return;
+    }
+    // ZMY SELF-ADDED CODE END
     assert!(external::is_active(), "gates-on config must activate");
 
     external::set_identity(IdentityAttrs {

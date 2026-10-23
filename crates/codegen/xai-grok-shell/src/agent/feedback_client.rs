@@ -830,8 +830,9 @@ mod forbidden_tests {
     }
 
     // ZMY SELF-ADDED CODE END
+    // ZMY SELF-ADDED CODE START
     #[tokio::test]
-    async fn send_empty_returns_ok_on_403() {
+    async fn fork_send_empty_fails_before_http_forbidden_response() {
         let router = Router::new().route(
             "/v1/feedback/requests/{id}/complete",
             post(|| async { forbidden_handler() }),
@@ -849,17 +850,17 @@ mod forbidden_tests {
             "feedbackType": "rating",
         }))
         .unwrap();
-        // ZMY SELF-ADDED CODE START
         let error = client
             .complete_request("req-1", &submission)
             .await
             .unwrap_err();
         assert_eq!(error.to_string(), FEEDBACK_DISABLED_MESSAGE);
-        // ZMY SELF-ADDED CODE END
     }
+    // ZMY SELF-ADDED CODE END
 
+    // ZMY SELF-ADDED CODE START
     #[tokio::test]
-    async fn send_json_bails_on_403_with_clear_message() {
+    async fn fork_send_json_fails_before_http_forbidden_response() {
         let router = Router::new().route(
             "/v1/feedback/config",
             axum::routing::get(|| async { forbidden_handler() }),
@@ -872,11 +873,10 @@ mod forbidden_tests {
             Some("tok".into()),
         );
         let result = client.get_feedback_config().await;
-        // ZMY SELF-ADDED CODE START
         let err = result.unwrap_err();
         assert_eq!(err.to_string(), FEEDBACK_DISABLED_MESSAGE);
-        // ZMY SELF-ADDED CODE END
     }
+    // ZMY SELF-ADDED CODE END
 }
 
 /// Auth resolve and 401 recovery tests.
@@ -900,10 +900,10 @@ mod auth_refresh_tests {
         (addr, handle)
     }
 
-    /// `send_empty` must sign with the AuthManager bearer.
-    /// It used to skip the resolve and go out unauthenticated.
+    // ZMY SELF-ADDED CODE START
+    /// Disabled feedback must fail before resolving or sending the AuthManager bearer.
     #[tokio::test]
-    async fn send_empty_signs_request_with_active_auth() {
+    async fn fork_send_empty_stops_before_active_auth_or_transport() {
         let captured = Arc::new(parking_lot::Mutex::new(None::<String>));
         let captured_for_handler = captured.clone();
         let router = Router::new().route(
@@ -918,7 +918,7 @@ mod auth_refresh_tests {
                 }
             }),
         );
-        let (addr, _server) = start_server(router).await;
+        let (addr, server) = start_server(router).await;
 
         let dir = tempfile::tempdir().unwrap();
         let am = Arc::new(AuthManager::new(dir.path(), GrokComConfig::default()));
@@ -943,18 +943,21 @@ mod auth_refresh_tests {
             "feedbackType": "rating",
         }))
         .unwrap();
-        client
+        let err = client
             .complete_request("req-1", &submission)
             .await
-            .expect("send_empty must succeed when authenticated");
+            .unwrap_err();
 
-        let sent = captured.lock().clone().expect("server saw the request");
-        assert_eq!(sent, "Bearer fresh-from-auth-manager");
+        assert_eq!(err.to_string(), FEEDBACK_DISABLED_MESSAGE);
+        assert!(captured.lock().is_none());
+        server.abort();
     }
+    // ZMY SELF-ADDED CODE END
 
-    /// Outgoing bearer must match `AuthManager.current()`, not the FeedbackClient's build-time snapshot.
+    // ZMY SELF-ADDED CODE START
+    /// Disabled feedback must not transmit an active AuthManager bearer.
     #[tokio::test]
-    async fn feedback_client_uses_active_auth_for_each_request() {
+    async fn fork_feedback_client_stops_before_active_auth_or_transport() {
         let captured = Arc::new(parking_lot::Mutex::new(None::<String>));
         let captured_for_handler = captured.clone();
         let router = Router::new().route(
@@ -969,7 +972,7 @@ mod auth_refresh_tests {
                 }
             }),
         );
-        let (addr, _server) = start_server(router).await;
+        let (addr, server) = start_server(router).await;
 
         let dir = tempfile::tempdir().unwrap();
         let am = Arc::new(AuthManager::new(dir.path(), GrokComConfig::default()));
@@ -989,14 +992,13 @@ mod auth_refresh_tests {
         )
         .with_auth_manager(am.clone());
 
-        let _ = client.get_feedback_config().await;
+        let err = client.get_feedback_config().await.unwrap_err();
 
-        let sent = captured.lock().clone().expect("server saw the request");
-        assert_eq!(
-            sent, "Bearer fresh-from-auth-manager",
-            "outgoing bearer must come from AuthManager (not the build-time snapshot)"
-        );
+        assert_eq!(err.to_string(), FEEDBACK_DISABLED_MESSAGE);
+        assert!(captured.lock().is_none());
+        server.abort();
     }
+    // ZMY SELF-ADDED CODE END
 
     /// Counts refresh() calls; proves the disk reload short-circuits before the IdP is hit.
     struct CountingRefresher {

@@ -66,6 +66,21 @@ async fn external_stream_end_to_end() {
     };
 
     xai_grok_telemetry::external::init(Some(cfg));
+    // ZMY SELF-ADDED CODE START
+    if !xai_grok_config::Distribution::current()
+        .allows(xai_grok_config::Capability::Telemetry)
+    {
+        assert!(!xai_grok_telemetry::external::is_active());
+        tokio::task::spawn_blocking(xai_grok_telemetry::external::flush)
+            .await
+            .unwrap();
+        tokio::task::spawn_blocking(xai_grok_telemetry::external::shutdown)
+            .await
+            .unwrap();
+        assert!(server.recorder().exports().is_empty());
+        return;
+    }
+    // ZMY SELF-ADDED CODE END
     assert!(xai_grok_telemetry::external::is_active());
 
     xai_grok_telemetry::external::set_identity(IdentityAttrs {
