@@ -2446,3 +2446,72 @@ fn npm_entry_is_recognized_by_the_binary_location() {
     assert!(super::is_under_node_modules(&resolved));
     assert!(!super::is_under_node_modules(&root.join("home/bin/grok")));
 }
+// ZMY SELF-ADDED CODE START
+
+#[tokio::test]
+#[serial_test::serial]
+async fn fork_update_paths_are_disabled_without_network_or_installation() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let accepted = tokio::spawn(async move {
+        tokio::time::timeout(std::time::Duration::from_millis(200), listener.accept())
+            .await
+            .is_ok()
+    });
+    let endpoint = format!("http://{addr}");
+    let mut update_config = UpdateConfig {
+        proxy_base_url: endpoint.clone(),
+        auth_scope: "fork-test".to_owned(),
+        deployment_key: None,
+        alpha_test_key: None,
+        channel: "stable".to_owned(),
+        npm_registry: Some(endpoint),
+    };
+
+    let status = check_update_status(&update_config).await;
+    assert_eq!(status.latest_version, None);
+    assert!(!status.update_available);
+    assert_eq!(status.installer, None);
+    assert_eq!(status.auto_update, Some(false));
+    assert_eq!(
+        status.error.as_deref(),
+        Some(crate::UPDATES_DISABLED_MESSAGE)
+    );
+    assert!(check_update_background(&update_config).await.update.is_none());
+    assert_eq!(auto_update_target(&update_config).await, None);
+    let ensured = ensure_latest_on_disk(&update_config).await.unwrap();
+    assert_eq!(ensured.installed, None);
+    assert!(!ensured.relaunch_needed);
+    assert!(
+        !run_update_if_available(
+            UpdateRunMode::Blocking,
+            false,
+            CliUpdateTrigger::UserCommand,
+            &update_config,
+        )
+        .await
+        .unwrap()
+    );
+    for (force, pinned_version) in [(false, None), (true, None), (false, Some("0.1.1"))] {
+        let err = run_update(
+            force,
+            pinned_version,
+            Some("alpha"),
+            &mut update_config,
+            CliUpdateTrigger::UserCommand,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.to_string(), crate::UPDATES_DISABLED_MESSAGE);
+    }
+    let err = fetch_latest_version("npm", &update_config)
+        .await
+        .unwrap_err();
+    assert_eq!(err.to_string(), crate::UPDATES_DISABLED_MESSAGE);
+    assert_eq!(try_fetch_stable_pointer().await, None);
+    assert!(
+        !accepted.await.unwrap(),
+        "disabled updater paths must not contact a configured endpoint"
+    );
+}
+// ZMY SELF-ADDED CODE END

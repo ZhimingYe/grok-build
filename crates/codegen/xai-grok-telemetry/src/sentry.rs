@@ -32,9 +32,14 @@ static CONFIG: OnceLock<Config> = OnceLock::new();
 pub fn init(config: Config) -> ClientInitGuard {
     let config = CONFIG.get_or_init(|| config);
 
-    if config.disabled {
+    // ZMY SELF-ADDED CODE START
+    if config.disabled
+        || !xai_grok_config::Distribution::current()
+            .allows(xai_grok_config::Capability::ErrorReporting)
+    {
         return sentry::init(ClientOptions::default());
     }
+    // ZMY SELF-ADDED CODE END
 
     let dsn = std::env::var("SENTRY_DSN")
         .ok()

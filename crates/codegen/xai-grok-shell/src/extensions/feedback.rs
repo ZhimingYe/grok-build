@@ -45,8 +45,10 @@ pub async fn handle(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
 }
 
 /// Shown for every `x.ai/feedback*` request while the feature flag is off
-pub const FEEDBACK_DISABLED_MESSAGE: &str = "Feedback is disabled. To enable, set \
-GROK_FEEDBACK_ENABLED=true or [features] feedback = true in config.toml.";
+// ZMY SELF-ADDED CODE START
+pub const FEEDBACK_DISABLED_MESSAGE: &str =
+    "Feedback and session telemetry are disabled in this fork.";
+// ZMY SELF-ADDED CODE END
 
 fn apply_feedback_context(submission: &mut FeedbackSubmission, ctx: Option<FeedbackContext>) {
     let Some(ctx) = ctx else {

@@ -120,10 +120,15 @@ fn every_registered_feature_reads_its_own_remote_setting() {
             }
         }
 
-        let resolved = spec.id.resolve(FeatureSources {
-            remote: spec.id.remote_value(Some(&settings)),
-            ..Default::default()
-        });
+        // ZMY SELF-ADDED CODE START
+        let resolved = spec.id.resolve_as(
+            Distribution::STOCK,
+            FeatureSources {
+                remote: spec.id.remote_value(Some(&settings)),
+                ..Default::default()
+            },
+        );
+        // ZMY SELF-ADDED CODE END
         assert_eq!(
             resolved.source,
             ConfigSource::Remote,
@@ -310,3 +315,20 @@ fn a_withheld_capability_turns_its_feature_off_over_every_source() {
             .value
     );
 }
+// ZMY SELF-ADDED CODE START
+
+#[test]
+fn fork_feedback_features_stay_off_over_every_source() {
+    let on = || FeatureSources {
+        pin: Some(true),
+        env: Some(true),
+        config: Some(true),
+        remote: Some(true),
+    };
+    for feature in [Feature::Feedback, Feature::FeedbackTraceCard] {
+        let resolved = feature.resolve(on());
+        assert!(!resolved.value, "{feature:?} must stay disabled");
+        assert_eq!(resolved.source, ConfigSource::Default);
+    }
+}
+// ZMY SELF-ADDED CODE END

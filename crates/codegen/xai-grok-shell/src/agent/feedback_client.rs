@@ -21,6 +21,10 @@ use prod_mc_cli_chat_proxy_types::feedback_types::{
 
 /// Client version header sent on every request to cli-chat-proxy for version gating.
 const CLIENT_VERSION_HEADER: &str = "x-grok-client-version";
+// ZMY SELF-ADDED CODE START
+const FEEDBACK_DISABLED_MESSAGE: &str =
+    "Feedback and session telemetry are disabled in this fork.";
+// ZMY SELF-ADDED CODE END
 
 /// HTTP error from the feedback/signals API with a preserved status code.
 ///
@@ -240,6 +244,13 @@ impl FeedbackClient {
         request: RequestBuilder,
         context: &'static str,
     ) -> Result<T> {
+        // ZMY SELF-ADDED CODE START
+        if !xai_grok_config::Distribution::current()
+            .allows(xai_grok_config::Capability::Telemetry)
+        {
+            anyhow::bail!(FEEDBACK_DISABLED_MESSAGE);
+        }
+        // ZMY SELF-ADDED CODE END
         let request = xai_grok_otel::inject_trace_context_into_request(request);
         let req = request.build().context(context)?;
         let (response, stamp) = xai_grok_auth::execute_with_stamp(&self.client, req)
@@ -274,6 +285,13 @@ impl FeedbackClient {
     }
 
     async fn send_empty(&self, request: RequestBuilder, context: &'static str) -> Result<()> {
+        // ZMY SELF-ADDED CODE START
+        if !xai_grok_config::Distribution::current()
+            .allows(xai_grok_config::Capability::Telemetry)
+        {
+            anyhow::bail!(FEEDBACK_DISABLED_MESSAGE);
+        }
+        // ZMY SELF-ADDED CODE END
         let request = xai_grok_otel::inject_trace_context_into_request(request);
         let req = request.build().context(context)?;
         let (response, stamp) = xai_grok_auth::execute_with_stamp(&self.client, req)
@@ -777,6 +795,41 @@ mod forbidden_tests {
         (axum::http::StatusCode::FORBIDDEN, "ZDR team")
     }
 
+    // ZMY SELF-ADDED CODE START
+    #[tokio::test]
+    async fn fork_feedback_helpers_fail_locally_without_contacting_listener() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let accepted = tokio::spawn(async move {
+            tokio::time::timeout(std::time::Duration::from_millis(200), listener.accept())
+                .await
+                .is_ok()
+        });
+        let client = FeedbackClient::with_client(
+            reqwest::Client::new(),
+            format!("http://{addr}/v1"),
+            Some("tok".into()),
+        );
+        let json_error = client.get_feedback_config().await.unwrap_err();
+        assert_eq!(json_error.to_string(), FEEDBACK_DISABLED_MESSAGE);
+        let submission: FeedbackSubmission = serde_json::from_value(serde_json::json!({
+            "sessionId": "s1",
+            "clientType": "agent",
+            "feedbackType": "rating",
+        }))
+        .unwrap();
+        let empty_error = client
+            .complete_request("req-1", &submission)
+            .await
+            .unwrap_err();
+        assert_eq!(empty_error.to_string(), FEEDBACK_DISABLED_MESSAGE);
+        assert!(
+            !accepted.await.unwrap(),
+            "disabled feedback helpers must not contact the listener"
+        );
+    }
+
+    // ZMY SELF-ADDED CODE END
     #[tokio::test]
     async fn send_empty_returns_ok_on_403() {
         let router = Router::new().route(
@@ -796,8 +849,13 @@ mod forbidden_tests {
             "feedbackType": "rating",
         }))
         .unwrap();
-        let result = client.complete_request("req-1", &submission).await;
-        assert!(result.is_ok(), "403 on send_empty must return Ok");
+        // ZMY SELF-ADDED CODE START
+        let error = client
+            .complete_request("req-1", &submission)
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), FEEDBACK_DISABLED_MESSAGE);
+        // ZMY SELF-ADDED CODE END
     }
 
     #[tokio::test]
@@ -814,11 +872,10 @@ mod forbidden_tests {
             Some("tok".into()),
         );
         let result = client.get_feedback_config().await;
+        // ZMY SELF-ADDED CODE START
         let err = result.unwrap_err();
-        assert!(
-            err.to_string().contains("(403)"),
-            "error must mention 403, got: {err}"
-        );
+        assert_eq!(err.to_string(), FEEDBACK_DISABLED_MESSAGE);
+        // ZMY SELF-ADDED CODE END
     }
 }
 

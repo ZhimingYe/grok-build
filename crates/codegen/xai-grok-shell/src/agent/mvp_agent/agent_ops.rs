@@ -591,6 +591,13 @@ impl MvpAgent {
     fn feedback_credentials(
         &self,
     ) -> Option<(String, Option<String>, Option<String>, Option<String>)> {
+        // ZMY SELF-ADDED CODE START
+        if !xai_grok_config::Distribution::current()
+            .allows(xai_grok_config::Capability::Telemetry)
+        {
+            return None;
+        }
+        // ZMY SELF-ADDED CODE END
         if !self.has_proxy_credentials() {
             return None;
         }

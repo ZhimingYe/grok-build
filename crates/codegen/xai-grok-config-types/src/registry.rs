@@ -215,7 +215,9 @@ pub const FEATURES: &[FeatureSpec] = &[
         env: "GROK_FEEDBACK_ENABLED",
         default_enabled: true,
         remote: Some(|settings| settings.feedback_enabled),
-        capability: None,
+        // ZMY SELF-ADDED CODE START
+        capability: Some(Capability::Telemetry),
+        // ZMY SELF-ADDED CODE END
     },
     FeatureSpec {
         id: Feature::FeedbackTraceCard,
@@ -224,7 +226,9 @@ pub const FEATURES: &[FeatureSpec] = &[
         env: "GROK_FEEDBACK_TRACE_CARD",
         default_enabled: false,
         remote: Some(|settings| settings.feedback_trace_card_enabled),
-        capability: None,
+        // ZMY SELF-ADDED CODE START
+        capability: Some(Capability::Telemetry),
+        // ZMY SELF-ADDED CODE END
     },
     FeatureSpec {
         id: Feature::TurnSummary,
