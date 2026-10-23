@@ -574,6 +574,7 @@ impl ModelsManager {
     ) -> bool {
         let options = self.model_reasoning_efforts(model_id);
         if options.is_empty() {
+            // ZMY SELF-ADDED CODE START
             return self.model_supports_reasoning_effort(model_id)
                 && matches!(
                     effort,
@@ -583,6 +584,7 @@ impl ModelsManager {
                         | ReasoningEffort::Xhigh
                         | ReasoningEffort::Max
                 );
+            // ZMY SELF-ADDED CODE END
         }
         options.iter().any(|option| option.value == effort)
     }

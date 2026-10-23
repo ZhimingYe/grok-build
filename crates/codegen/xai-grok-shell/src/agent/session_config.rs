@@ -4,6 +4,7 @@ use xai_grok_sampling_types::{ReasoningEffort, ReasoningEffortOption, effort_lab
 
 use crate::session::unified_list::SessionKind;
 
+// ZMY SELF-ADDED CODE START
 pub(crate) const SELECTABLE_REASONING_EFFORTS: [ReasoningEffort; 6] = [
     ReasoningEffort::Minimal,
     ReasoningEffort::Low,
@@ -12,6 +13,7 @@ pub(crate) const SELECTABLE_REASONING_EFFORTS: [ReasoningEffort; 6] = [
     ReasoningEffort::Xhigh,
     ReasoningEffort::Max,
 ];
+// ZMY SELF-ADDED CODE END
 
 pub(crate) const CONFIG_ID_MODEL: &str = "model";
 pub(crate) const CONFIG_ID_REASONING_EFFORT: &str = "reasoning_effort";
@@ -55,7 +57,9 @@ impl GrokSessionDetail {
     }
 }
 
+// ZMY SELF-ADDED CODE START
 /// The built-in session-picker modes used when the model has no server list.
+// ZMY SELF-ADDED CODE END
 pub(crate) fn legacy_session_effort_options() -> Vec<ReasoningEffortOption> {
     SELECTABLE_REASONING_EFFORTS
         .iter()
@@ -194,12 +198,14 @@ mod tests {
             model("grok-4.5", "Grok 4.5"),
         ];
         let current = acp::ModelId::from("grok-build");
+        // ZMY SELF-ADDED CODE START
         let opts = build_session_config_options(
             &models,
             &current,
             &legacy_session_effort_options(),
             Some(ReasoningEffort::Max),
         );
+        // ZMY SELF-ADDED CODE END
 
         let model_opts: Vec<_> = opts.iter().filter(|o| o.category == "model").collect();
         assert_eq!(model_opts.len(), 2);
@@ -217,8 +223,10 @@ mod tests {
         let Some(selected_mode) = selected_modes.first() else {
             panic!("expected one selected mode: {selected_modes:?}");
         };
+        // ZMY SELF-ADDED CODE START
         assert_eq!(selected_mode.id, "max");
         assert_eq!(selected_mode.label, "Max");
+        // ZMY SELF-ADDED CODE END
     }
 
     #[test]
