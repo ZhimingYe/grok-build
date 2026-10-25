@@ -799,6 +799,7 @@ mod tests {
             enterprise_oidc_issuer: None,
             login_label: None,
             has_auth_provider_command: false,
+            disable_api_key_auth: false,
             preferred_method: None,
         }
     }
@@ -992,6 +993,9 @@ mod tests {
             enterprise_oidc_issuer: None,
             login_label: None,
             has_auth_provider_command: false,
+            // ZMY SELF-ADDED CODE START
+            disable_api_key_auth: false,
+            // ZMY SELF-ADDED CODE END
             preferred_method: None,
         });
         let (needs, label, method_id, mode) = startup_auth_metadata(&built.methods);

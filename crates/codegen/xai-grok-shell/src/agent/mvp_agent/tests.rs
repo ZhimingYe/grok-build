@@ -3991,6 +3991,106 @@ async fn cached_token_fallthrough_falls_to_grok_com_without_credentials() {
         "no API-key creds and no kill switch -> interactive grok.com login",
     );
 }
+// ZMY SELF-ADDED CODE START
+#[test]
+#[serial_test::serial]
+fn fork_accountless_cached_token_fallthrough_refuses_automatic_oauth() {
+    use crate::agent::auth_method::{
+        CACHED_TOKEN_AUTH_METHOD_ID, OPTIONAL_ACCOUNT_LOGIN_REQUIRED_MESSAGE,
+    };
+    use std::sync::atomic::Ordering;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use xai_grok_login::{AuthManager, GrokComConfig, OAuth2ProviderConfig};
+
+    let home = tempfile::tempdir().unwrap();
+    let _env = fork_accountless_env(home.path());
+    run_local_for_bridge_test(|| {
+        Box::pin(async move {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind local OAuth sink");
+            let issuer = format!("http://{}", listener.local_addr().unwrap());
+            let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let server_requests = requests.clone();
+            let server = tokio::task::spawn_local(async move {
+                loop {
+                    let Ok((mut stream, _)) = listener.accept().await else {
+                        break;
+                    };
+                    server_requests.fetch_add(1, Ordering::SeqCst);
+                    let mut request = [0; 2048];
+                    let _ = stream.read(&mut request).await;
+                    let _ = stream
+                    .write_all(
+                        b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                    .await;
+                }
+            });
+            let mut login_config = GrokComConfig::default();
+            login_config.oidc = None;
+            login_config.oauth2 = Some(OAuth2ProviderConfig {
+                issuer,
+                client_id: "accountless-test".into(),
+                scopes: Vec::new(),
+                principal_type: None,
+                principal_id: None,
+                referrer: None,
+            });
+            login_config.auth_provider_command = None;
+            login_config.preferred_method = None;
+            login_config.disable_api_key_auth = None;
+            login_config.force_login_team_uuid = None;
+            let auth_home = tempfile::tempdir().unwrap();
+            let auth_manager =
+                std::sync::Arc::new(AuthManager::new(auth_home.path(), login_config.clone()));
+            let mut cfg = crate::agent::config::Config::default();
+            cfg.grok_com_config = login_config;
+            let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+            let agent = MvpAgent::new(GatewaySender::new(tx), &cfg, auth_manager, None, None)
+                .expect("valid test config");
+            agent.set_auth_method(acp::AuthMethodId::new(CACHED_TOKEN_AUTH_METHOD_ID));
+
+            let err = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                <MvpAgent as acp::Agent>::authenticate(
+                    &agent,
+                    acp::AuthenticateRequest::new(acp::AuthMethodId::new(
+                        CACHED_TOKEN_AUTH_METHOD_ID,
+                    )),
+                ),
+            )
+            .await
+            .expect("missing cached-token authentication must complete promptly")
+            .expect_err("no credentials require explicit action");
+            assert_eq!(acp::Error::auth_required().code, err.code);
+            assert_eq!(
+                Some(OPTIONAL_ACCOUNT_LOGIN_REQUIRED_MESSAGE),
+                err.data.as_ref().and_then(|data| data.as_str())
+            );
+            assert_eq!(
+                Some(CACHED_TOKEN_AUTH_METHOD_ID),
+                agent
+                    .auth_method_id
+                    .load()
+                    .as_ref()
+                    .map(|method| method.0.as_ref())
+            );
+            assert!(agent.auth_manager.current().is_none());
+            assert_eq!(0, requests.load(Ordering::SeqCst));
+            assert!(
+                agent
+                    .cfg
+                    .borrow()
+                    .grok_com_config
+                    .auth_provider_command
+                    .is_none()
+            );
+            server.abort();
+        })
+    });
+}
+// ZMY SELF-ADDED CODE END
 /// Verifies the 4-state matrix of `(disable_zdr_incompatible_tools, zdr_video_output_s3)`: | ZDR flag | S3 config | Result | |----------|-----------|---------------------------------------------| | false | None | Enabled, no S3 (normal non-ZDR mode) | | true | None | Disabled (ZDR with no escape hatch) | | false | Some | Enabled, S3 **not** threaded (non-ZDR) | | true | Some | Enabled, S3 threaded (ZDR with upload path) |
 #[tokio::test(flavor = "current_thread")]
 async fn prepare_video_gen_config_disabled_when_zdr_flag_set() {
@@ -5089,6 +5189,117 @@ fn chat_session_spawn_options_matches_thin_profile() {
     );
     assert!(opts.is_chat_kind);
 }
+// ZMY SELF-ADDED CODE START
+fn fork_accountless_env(grok_home: &std::path::Path) -> Vec<xai_grok_test_support::EnvGuard> {
+    use crate::agent::auth_method::{LEGACY_XAI_API_KEY_ENV_VAR, XAI_API_KEY_ENV_VAR};
+    use xai_grok_test_support::EnvGuard;
+    vec![
+        EnvGuard::set("GROK_HOME", grok_home),
+        EnvGuard::unset(XAI_API_KEY_ENV_VAR),
+        EnvGuard::unset(LEGACY_XAI_API_KEY_ENV_VAR),
+        EnvGuard::unset("GROK_AUTH"),
+        EnvGuard::unset("GROK_AUTH_PATH"),
+        EnvGuard::unset("GROK_DISABLE_API_KEY_AUTH"),
+        EnvGuard::unset("GROK_FORCE_LOGIN_TEAM_ID"),
+        EnvGuard::unset("GROK_AUTH_PROVIDER_COMMAND"),
+        EnvGuard::unset("GROK_AUTH_PROVIDER_LABEL"),
+        EnvGuard::unset("GROK_AUTH_TOKEN_TTL"),
+        EnvGuard::unset("GROK_OIDC_ISSUER"),
+        EnvGuard::unset("GROK_OIDC_CLIENT_ID"),
+        EnvGuard::unset("GROK_OIDC_SCOPES"),
+        EnvGuard::unset("GROK_OIDC_AUDIENCE"),
+        EnvGuard::unset("GROK_OAUTH2_ISSUER"),
+        EnvGuard::unset("GROK_OAUTH2_CLIENT_ID"),
+        EnvGuard::unset("GROK_OAUTH2_SCOPES"),
+        EnvGuard::unset("GROK_OAUTH2_PRINCIPAL_TYPE"),
+        EnvGuard::unset("GROK_OAUTH2_PRINCIPAL_ID"),
+        EnvGuard::unset("GROK_OAUTH2_REFERRER"),
+        EnvGuard::set("GROK_LOCAL_AUTH", "1"),
+    ]
+}
+
+fn initialize_accountless_session_agent(agent: &MvpAgent) {
+    let init = acp::InitializeRequest::new(acp::ProtocolVersion::V1).client_capabilities(
+        acp::ClientCapabilities::new()
+            .fs(acp::FileSystemCapabilities::new())
+            .terminal(false),
+    );
+    agent.initialize_request.set(init).unwrap();
+}
+
+async fn new_session_without_auth_method(
+    agent: &MvpAgent,
+    cwd: &std::path::Path,
+) -> Result<acp::NewSessionResponse, acp::Error> {
+    initialize_accountless_session_agent(agent);
+    let sid = uuid::Uuid::now_v7().to_string();
+    let meta = serde_json::json!({ "sessionId": sid, "modelId": "test-model" })
+        .as_object()
+        .cloned();
+    agent
+        .new_session_inner(acp::NewSessionRequest::new(cwd.to_path_buf()).meta(meta))
+        .await
+}
+
+#[test]
+#[serial_test::serial]
+fn fork_accountless_session_can_be_created_and_reloaded_without_auth_method() {
+    let home = tempfile::tempdir().unwrap();
+    let _env = fork_accountless_env(home.path());
+    run_local_for_bridge_test(|| {
+        Box::pin(async move {
+            let cwd = tempfile::tempdir().unwrap();
+            let agent = build_minimal_agent_for_tests();
+            let created = new_session_without_auth_method(&agent, cwd.path())
+                .await
+                .expect("accountless session/new succeeds");
+            let sid = created.session_id;
+            assert!(agent.auth_method_id.load().is_none());
+            assert!(agent.auth_manager.current().is_none());
+            assert!(agent.sampling_config.borrow().api_key.is_none());
+            drain_persistence(&agent, &sid).await;
+            agent.remove_session(&sid);
+            drop(agent);
+
+            let reopened = build_minimal_agent_for_tests();
+            initialize_accountless_session_agent(&reopened);
+            reopened
+                .load_session_inner(acp::LoadSessionRequest::new(
+                    sid.clone(),
+                    cwd.path().to_path_buf(),
+                ))
+                .await
+                .expect("persisted accountless session reloads");
+            assert!(reopened.auth_method_id.load().is_none());
+            assert!(reopened.auth_manager.current().is_none());
+            assert!(reopened.sampling_config.borrow().api_key.is_none());
+            drain_persistence(&reopened, &sid).await;
+            reopened.remove_session(&sid);
+        })
+    });
+}
+
+#[test]
+#[serial_test::serial]
+fn fork_accountless_session_is_rejected_when_api_key_auth_is_disabled() {
+    let home = tempfile::tempdir().unwrap();
+    let _env = fork_accountless_env(home.path());
+    run_local_for_bridge_test(|| {
+        Box::pin(async move {
+            let agent = build_agent_with_api_key_auth_disabled();
+            let cwd = tempfile::tempdir().unwrap();
+            let err = new_session_without_auth_method(&agent, cwd.path())
+                .await
+                .expect_err("mandatory authentication must reject an accountless session");
+            assert_eq!(acp::Error::auth_required().code, err.code);
+            assert_eq!(
+                Some("no auth method id provided"),
+                err.data.as_ref().and_then(|data| data.as_str())
+            );
+        })
+    });
+}
+// ZMY SELF-ADDED CODE END
 /// Drives the real `session/new` path so a later `load_session_inner` is a genuine attach.
 async fn new_root_session(agent: &MvpAgent, cwd: &std::path::Path) -> acp::SessionId {
     agent.set_auth_method(acp::AuthMethodId::new("cached_token"));
