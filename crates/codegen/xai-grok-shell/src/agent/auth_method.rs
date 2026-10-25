@@ -204,6 +204,18 @@ fn build_unpinned(
         has_auth_provider_command,
     );
 
+    // ZMY SELF-ADDED CODE START
+    // Default account login is opt-in; configured providers and pinned auth remain mandatory.
+    if !has_enterprise_oidc
+        && !has_auth_provider_command
+        && let Some(acp::AuthMethod::Agent(method)) = methods.last_mut()
+    {
+        method
+            .meta
+            .get_or_insert_with(Default::default)
+            .insert("optional_login".to_owned(), serde_json::json!(true));
+    }
+    // ZMY SELF-ADDED CODE END
     BuiltAuthMethods {
         methods,
         default_auth_method_id,
@@ -582,16 +594,21 @@ mod tests {
         );
     }
 
-    /// Brand-new user (no API key, no cached token): only `grok.com` is advertised, and the pager will (correctly) show the login screen.
-    /// `default_auth_method_id` is None so the pager falls back to the advertised login method.
+    // ZMY SELF-ADDED CODE START
+    /// Fresh users may opt into account login, but startup must not require it.
     #[test]
-    fn fresh_user_only_advertises_grok_com_and_requires_login() {
+    fn fresh_user_advertises_optional_grok_com_login() {
         let built = build_auth_methods(default_inputs());
 
         assert_eq!(first_kind(&built.methods), Some(AuthMethodKind::GrokCom));
         assert!(built.default_auth_method_id.is_none());
         assert_eq!(built.methods.len(), 1);
+        assert_eq!(
+            built.methods[0].meta().as_ref().unwrap()["optional_login"],
+            true
+        );
     }
+    // ZMY SELF-ADDED CODE END
 
     /// Enterprise OIDC replaces `grok.com` (mutually exclusive).
     /// xai.api_key, when present, still leads.
