@@ -2618,6 +2618,11 @@ async fn run_update_blocking(update_config: &UpdateConfig) -> bool {
 }
 /// Central gate for auto-update checks; add new suppression rules here, not at call sites.
 fn should_check_for_updates(no_auto_update_flag: bool) -> bool {
+    // ZMY SELF-ADDED CODE START
+    if !xai_grok_update::updates_enabled() {
+        return false;
+    }
+    // ZMY SELF-ADDED CODE END
     if cfg!(debug_assertions) {
         return false;
     }
@@ -2701,11 +2706,20 @@ async fn run_update_command(
         if version.is_some() {
             anyhow::bail!("--version cannot be used with --check");
         }
-        auto_update::apply_channel_switch(channel_switch, &mut update_config).await;
+        // ZMY SELF-ADDED CODE START
+        if xai_grok_update::updates_enabled() {
+            auto_update::apply_channel_switch(channel_switch, &mut update_config).await;
+        }
+        // ZMY SELF-ADDED CODE END
         let status = auto_update::check_update_status(&update_config).await;
         auto_update::print_update_status(&status, json)?;
         return Ok(());
     }
+    // ZMY SELF-ADDED CODE START
+    if !xai_grok_update::updates_enabled() {
+        anyhow::bail!("{}", xai_grok_update::UPDATES_DISABLED_MESSAGE);
+    }
+    // ZMY SELF-ADDED CODE END
     if let Some(ref v) = version
         && semver::Version::parse(v).is_err()
     {

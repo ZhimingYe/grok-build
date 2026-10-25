@@ -1,8 +1,12 @@
 use super::*;
 use serial_test::serial;
 use xai_grok_test_support::EnvGuard;
+// ZMY SELF-ADDED CODE START
+use super::resolve_external_otel_options as resolve_external_otel_config_with;
+// ZMY SELF-ADDED CODE END
+// ZMY SELF-ADDED CODE START
 #[test]
-fn coding_data_opt_out_does_not_block_uploads_to_own_bucket() {
+fn fork_telemetry_policy_blocks_all_trace_uploads() {
     let normal = xai_grok_login::GrokAuth::test_default();
     let opted_out = xai_grok_login::GrokAuth {
         coding_data_retention_opt_out: true,
@@ -13,12 +17,12 @@ fn coding_data_opt_out_does_not_block_uploads_to_own_bucket() {
         ..xai_grok_login::GrokAuth::test_default()
     };
     let cases = [
-        (None, &normal, false),
+        (None, &normal, true),
         (None, &opted_out, true),
         (None, &zdr, true),
-        (Some("s3://acme-traces"), &normal, false),
-        (Some("s3://acme-traces"), &opted_out, false),
-        (Some("gs://acme-traces"), &opted_out, false),
+        (Some("s3://acme-traces"), &normal, true),
+        (Some("s3://acme-traces"), &opted_out, true),
+        (Some("gs://acme-traces"), &opted_out, true),
         (Some("s3://acme-traces"), &zdr, true),
         (Some("ftp://acme-traces"), &opted_out, true),
     ];
@@ -36,6 +40,7 @@ fn coding_data_opt_out_does_not_block_uploads_to_own_bucket() {
         );
     }
 }
+// ZMY SELF-ADDED CODE END
 #[test]
 fn main_cli_tools_override_preserves_profile_injection_policy() {
     let overrides = CliAgentOverrides {
@@ -4569,26 +4574,27 @@ fn resolve_trace_upload_disabled_when_telemetry_off_despite_remote_flag() {
     assert!(!r.value, "telemetry off must force trace upload off");
     assert!(!cfg.is_trace_upload_enabled());
 }
+// ZMY SELF-ADDED CODE START
 #[test]
 #[serial]
-fn resolve_trace_upload_explicit_config_wins_over_telemetry_off() {
+fn fork_trace_upload_stays_off_despite_explicit_config_and_pin() {
     unsafe { std::env::remove_var("GROK_TELEMETRY_ENABLED") };
     unsafe { std::env::remove_var("GROK_TELEMETRY_TRACE_UPLOAD") };
     let mut cfg = Config::default();
     cfg.features.telemetry = Some(TelemetryMode::Disabled);
     cfg.telemetry.trace_upload = Some(true);
     let r = cfg.resolve_trace_upload();
-    assert!(
-        r.value,
-        "explicit trace_upload config wins over telemetry off"
-    );
-    assert_eq!(r.source, ConfigSource::Config);
+    assert!(!r.value);
+    assert_eq!(r.source, ConfigSource::Default);
     cfg.telemetry.trace_upload = None;
     cfg.requirements
         .trace_upload
         .pin(true, crate::config::RequirementSource::Unknown);
-    assert!(cfg.resolve_trace_upload().value);
+    let pinned = cfg.resolve_trace_upload();
+    assert!(!pinned.value);
+    assert_eq!(pinned.source, ConfigSource::Default);
 }
+// ZMY SELF-ADDED CODE END
 #[test]
 #[serial]
 fn trace_upload_stays_off_under_a_requirements_pin_when_the_distribution_withholds_telemetry() {
@@ -4613,9 +4619,10 @@ fn trace_upload_stays_off_under_a_requirements_pin_when_the_distribution_withhol
             .value
     );
 }
+// ZMY SELF-ADDED CODE START
 #[test]
 #[serial]
-fn trace_upload_decision_debug_reports_winning_source() {
+fn trace_upload_debug_reports_fork_policy_and_input_source() {
     unsafe { std::env::remove_var("GROK_TELEMETRY_ENABLED") };
     unsafe { std::env::remove_var("GROK_TELEMETRY_TRACE_UPLOAD") };
     let mut cfg = Config::default();
@@ -4649,20 +4656,22 @@ fn trace_upload_decision_debug_reports_winning_source() {
     let d = cfg.trace_upload_decision_debug();
     assert_eq!(
         d.get("trace_upload"),
-        Some(&serde_json::json!(serde_json::json!(true)))
+        Some(&serde_json::json!(serde_json::json!(false)))
     );
     assert_eq!(
         d.get("trace_upload_source"),
-        Some(&serde_json::json!(serde_json::json!("config")))
+        Some(&serde_json::json!(serde_json::json!("default")))
     );
     assert_eq!(
         d.get("in_cfg_telemetry_trace_upload"),
         Some(&serde_json::json!(serde_json::json!(true)))
     );
 }
+// ZMY SELF-ADDED CODE END
 #[test]
 #[serial]
-fn resolve_trace_upload_honors_config_when_telemetry_on() {
+// ZMY SELF-ADDED CODE START
+fn fork_trace_upload_stays_off_when_user_telemetry_is_enabled() {
     unsafe { std::env::remove_var("GROK_TELEMETRY_ENABLED") };
     unsafe { std::env::remove_var("DISABLE_TELEMETRY") };
     unsafe { std::env::remove_var("GROK_TELEMETRY_TRACE_UPLOAD") };
@@ -4671,11 +4680,13 @@ fn resolve_trace_upload_honors_config_when_telemetry_on() {
     cfg.telemetry.trace_upload = Some(false);
     let r = cfg.resolve_trace_upload();
     assert!(!r.value);
-    assert_eq!(r.source, ConfigSource::Config);
+    assert_eq!(r.source, ConfigSource::Default);
     cfg.telemetry.trace_upload = None;
     let r = cfg.resolve_trace_upload();
-    assert!(r.value, "defaults on when telemetry fully enabled");
+    assert!(!r.value);
+    assert_eq!(r.source, ConfigSource::Default);
 }
+// ZMY SELF-ADDED CODE END
 #[test]
 #[serial]
 fn resolve_goal_defaults_to_true_when_unset() {
@@ -6024,26 +6035,16 @@ fn unknown_key_still_warns_next_to_exempt_sections() {
         "exactly the typo'd key must be flagged"
     );
 }
-/// Regression: a deployment key with no OAuth token must resolve to Proxy.
+// ZMY SELF-ADDED CODE START
 #[test]
-fn resolve_upload_method_accepts_deployment_key_without_oauth() {
-    use crate::session::repo_changes::UploadMethod;
+fn fork_trace_upload_rejects_deployment_key() {
     let endpoints = EndpointsConfig {
         deployment_key: Some("enterprise-key".to_string()),
         ..Default::default()
     };
-    match endpoints.resolve_upload_method(None) {
-        Some(UploadMethod::Proxy {
-            deployment_key,
-            user_token,
-            ..
-        }) => {
-            assert_eq!(deployment_key.as_deref(), Some("enterprise-key"));
-            assert_eq!(user_token, "");
-        }
-        other => panic!("expected Proxy upload method, got {other:?}"),
-    }
+    assert!(endpoints.resolve_upload_method(None).is_none());
 }
+// ZMY SELF-ADDED CODE END
 fn ext_env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + use<> {
     let map: std::collections::HashMap<String, String> = pairs
         .iter()
@@ -6054,6 +6055,41 @@ fn ext_env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + use<> {
 fn ext_client() -> xai_grok_telemetry::external::config::ExternalClientInfo {
     xai_grok_telemetry::external::config::ExternalClientInfo::default()
 }
+// ZMY SELF-ADDED CODE START
+#[test]
+fn fork_external_otel_stays_disabled_with_file_env_and_requirement_opt_ins() {
+    let effective: toml::Value = toml::from_str(
+        r#"
+            [telemetry]
+            otel_enabled = true
+            otel_logs_exporter = "otlp"
+            otel_endpoint = "http://file-collector:4318"
+            "#,
+    )
+    .unwrap();
+    let requirements: toml::Value = toml::from_str(
+        r#"
+            [telemetry]
+            otel_enabled = true
+            otel_logs_exporter = "otlp"
+            otel_endpoint = "http://pinned-collector:4318"
+            "#,
+    )
+    .unwrap();
+    let resolved = super::resolve_external_otel_config_with(
+        Some(&effective),
+        Some(&requirements),
+        ext_env(&[
+            ("GROK_EXTERNAL_OTEL", "1"),
+            ("OTEL_LOGS_EXPORTER", "otlp"),
+            ("OTEL_EXPORTER_OTLP_ENDPOINT", "http://env-collector:4318"),
+        ]),
+        ext_client(),
+        false,
+    );
+    assert!(resolved.is_none());
+}
+// ZMY SELF-ADDED CODE END
 #[test]
 fn external_otel_default_off_and_double_opt_in() {
     assert!(
@@ -7022,22 +7058,24 @@ telemetry = "garbage"
     .unwrap();
     assert_eq!(telemetry_enabled_from_toml(&unknown), None);
 }
+// ZMY SELF-ADDED CODE START
 #[test]
 #[serial]
-fn is_telemetry_explicitly_disabled_sync_env_signals() {
-    unsafe { std::env::set_var("GROK_TELEMETRY_ENABLED", "0") };
-    unsafe { std::env::remove_var("DISABLE_TELEMETRY") };
-    assert!(is_telemetry_explicitly_disabled_sync());
+fn fork_sync_telemetry_cannot_be_enabled_by_environment() {
     unsafe { std::env::set_var("GROK_TELEMETRY_ENABLED", "1") };
-    assert!(!is_telemetry_explicitly_disabled_sync());
-    unsafe { std::env::remove_var("GROK_TELEMETRY_ENABLED") };
+    unsafe { std::env::remove_var("DISABLE_TELEMETRY") };
+    assert!(is_telemetry_explicitly_disabled_sync());
     unsafe { std::env::set_var("DISABLE_TELEMETRY", "1") };
+    assert!(is_telemetry_disabled_sync());
     assert!(is_telemetry_explicitly_disabled_sync());
     unsafe { std::env::remove_var("DISABLE_TELEMETRY") };
+    unsafe { std::env::remove_var("GROK_TELEMETRY_ENABLED") };
 }
+// ZMY SELF-ADDED CODE END
+// ZMY SELF-ADDED CODE START
 #[test]
 #[serial]
-fn resolve_telemetry_mode_disable_env_beats_opt_in_but_not_requirements_pin() {
+fn fork_telemetry_mode_ignores_environment_and_requirement_opt_ins() {
     let home = tempfile::tempdir().unwrap();
     let _home = EnvGuard::set("GROK_HOME", home.path());
     let _enable = EnvGuard::set("GROK_TELEMETRY_ENABLED", "true");
@@ -7047,31 +7085,35 @@ fn resolve_telemetry_mode_disable_env_beats_opt_in_but_not_requirements_pin() {
     let resolved = cfg.resolve_telemetry_mode();
     assert_eq!(
         (resolved.value, resolved.source),
-        (TelemetryMode::Enabled, ConfigSource::Env)
+        (TelemetryMode::Disabled, ConfigSource::Default)
     );
     let _truthy = EnvGuard::set("DISABLE_TELEMETRY", "1");
     let resolved = cfg.resolve_telemetry_mode();
     assert_eq!(
         (resolved.value, resolved.source),
-        (TelemetryMode::Disabled, ConfigSource::Env)
+        (TelemetryMode::Disabled, ConfigSource::Default)
     );
     assert!(
         is_telemetry_disabled_sync(),
         "sync gate must agree with resolve_telemetry_mode"
     );
+    assert!(is_telemetry_explicitly_disabled_sync());
     cfg.requirements.telemetry.pin(
         TelemetryMode::Enabled,
         crate::config::RequirementSource::Unknown,
     );
+    let _disable_off = EnvGuard::set("DISABLE_TELEMETRY", "0");
     let resolved = cfg.resolve_telemetry_mode();
     assert_eq!(
         (resolved.value, resolved.source),
-        (TelemetryMode::Enabled, ConfigSource::Requirement)
+        (TelemetryMode::Disabled, ConfigSource::Default)
     );
 }
+// ZMY SELF-ADDED CODE END
+// ZMY SELF-ADDED CODE START
 #[test]
 #[serial]
-fn requirements_telemetry_pin_beats_user_config() {
+fn fork_telemetry_requirements_cannot_reenable_telemetry() {
     unsafe { std::env::remove_var("DISABLE_TELEMETRY") };
     unsafe { std::env::remove_var("GROK_TELEMETRY_ENABLED") };
     let mut cfg = Config::default();
@@ -7083,7 +7125,7 @@ fn requirements_telemetry_pin_beats_user_config() {
     let off = cfg.resolve_telemetry_mode();
     assert_eq!(
         (off.value, off.source),
-        (TelemetryMode::Disabled, ConfigSource::Requirement)
+        (TelemetryMode::Disabled, ConfigSource::Default)
     );
     cfg.features.telemetry = Some(TelemetryMode::Disabled);
     cfg.requirements.telemetry.pin(
@@ -7093,9 +7135,10 @@ fn requirements_telemetry_pin_beats_user_config() {
     let on = cfg.resolve_telemetry_mode();
     assert_eq!(
         (on.value, on.source),
-        (TelemetryMode::Enabled, ConfigSource::Requirement)
+        (TelemetryMode::Disabled, ConfigSource::Default)
     );
 }
+// ZMY SELF-ADDED CODE END
 #[test]
 fn version_overrides_apply_into_typed_config() {
     let mut value: toml::Value = toml::from_str(

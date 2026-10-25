@@ -37,6 +37,17 @@ fn external_stream_grpc_end_to_end() {
     };
 
     xai_grok_telemetry::external::init(Some(cfg));
+    // ZMY SELF-ADDED CODE START
+    if !xai_grok_config::Distribution::current()
+        .allows(xai_grok_config::Capability::Telemetry)
+    {
+        assert!(!xai_grok_telemetry::external::is_active());
+        xai_grok_telemetry::external::flush();
+        xai_grok_telemetry::external::shutdown();
+        assert!(recorder.exports().is_empty());
+        return;
+    }
+    // ZMY SELF-ADDED CODE END
     assert!(xai_grok_telemetry::external::is_active());
 
     xai_grok_telemetry::log_event(xai_grok_telemetry::events::SessionNew {

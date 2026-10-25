@@ -167,6 +167,11 @@ pub trait TraceUploadEndpoints {
 }
 impl TraceUploadEndpoints for EndpointsConfig {
     fn resolve_direct_upload_method(&self) -> Option<crate::session::repo_changes::UploadMethod> {
+        // ZMY SELF-ADDED CODE START
+        if !Distribution::current().allows(Capability::Telemetry) {
+            return None;
+        }
+        // ZMY SELF-ADDED CODE END
         let bucket_url = self.trace_upload_bucket.as_deref()?.trim();
         if bucket_url.is_empty() {
             return None;
@@ -205,6 +210,11 @@ impl TraceUploadEndpoints for EndpointsConfig {
         &self,
         auth_token: Option<String>,
     ) -> Option<crate::session::repo_changes::UploadMethod> {
+        // ZMY SELF-ADDED CODE START
+        if !Distribution::current().allows(Capability::Telemetry) {
+            return None;
+        }
+        // ZMY SELF-ADDED CODE END
         if let Some(method) = self.resolve_direct_upload_method() {
             return Some(method);
         }
@@ -237,6 +247,11 @@ impl TraceUploadEndpoints for EndpointsConfig {
         })
     }
     fn is_trace_upload_blocked_for(&self, auth: &xai_grok_login::GrokAuth) -> bool {
+        // ZMY SELF-ADDED CODE START
+        if !Distribution::current().allows(Capability::Telemetry) {
+            return true;
+        }
+        // ZMY SELF-ADDED CODE END
         if self.resolve_direct_upload_method().is_some() {
             auth.is_zdr_team()
         } else {
@@ -2726,6 +2741,28 @@ pub(crate) fn resolve_external_otel_config_with(
     client: xai_grok_telemetry::external::config::ExternalClientInfo,
     internal_pipeline_consumed_otel_vars: bool,
 ) -> Option<xai_grok_telemetry::external::ExternalOtelConfig> {
+    // ZMY SELF-ADDED CODE START
+    if !Distribution::current().allows(Capability::Telemetry) {
+        return None;
+    }
+    resolve_external_otel_options(
+        effective_config,
+        requirements,
+        getenv,
+        client,
+        internal_pipeline_consumed_otel_vars,
+    )
+}
+
+// ZMY SELF-ADDED CODE END
+// ZMY SELF-ADDED CODE START
+fn resolve_external_otel_options(
+    effective_config: Option<&toml::Value>,
+    requirements: Option<&toml::Value>,
+    getenv: impl Fn(&str) -> Option<String>,
+    client: xai_grok_telemetry::external::config::ExternalClientInfo,
+    internal_pipeline_consumed_otel_vars: bool,
+) -> Option<xai_grok_telemetry::external::ExternalOtelConfig> {
     let pins =
         crate::agent::external_otel_pin::RequirementOtelPins::from_requirements(requirements);
     let file_cfg: Option<xai_grok_telemetry::external::ExternalOtelFileConfig> = effective_config
@@ -2746,6 +2783,7 @@ pub(crate) fn resolve_external_otel_config_with(
     resolved.internal_pipeline_consumed_otel_vars = internal_pipeline_consumed_otel_vars;
     Some(resolved)
 }
+// ZMY SELF-ADDED CODE END
 /// Apply the restrictive-only remote-settings policy for the external OTEL stream (fleet kill switch and content-gate lock).
 /// Tighten-only by construction (there is no remote enable direction), so it is safe to call on every settings refresh.
 pub(crate) fn apply_external_otel_remote_policy(

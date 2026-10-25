@@ -45,7 +45,9 @@ impl Distribution {
     }
     /// This build's distribution.
     pub const fn current() -> Self {
-        Self::STOCK
+        // ZMY SELF-ADDED CODE START
+        Self::withholding(&[Capability::Telemetry, Capability::ErrorReporting])
+        // ZMY SELF-ADDED CODE END
     }
     pub const fn allows(self, capability: Capability) -> bool {
         self.withheld & capability.bit() == 0

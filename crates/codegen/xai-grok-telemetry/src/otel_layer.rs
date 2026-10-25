@@ -13,6 +13,14 @@ pub fn build_otel_layer<S>(
 where
     S: tracing::Subscriber + for<'span> LookupSpan<'span>,
 {
+    // ZMY SELF-ADDED CODE START
+    let mut config = config;
+    if !xai_grok_config::Distribution::current()
+        .allows(xai_grok_config::Capability::Telemetry)
+    {
+        config.exporter.enabled = false;
+    }
+    // ZMY SELF-ADDED CODE END
     let mode = match crate::instrumentation::current_mode() {
         crate::instrumentation::InstrumentationMode::Server => {
             xai_grok_otel::provider::OtelProviderMode::Server
