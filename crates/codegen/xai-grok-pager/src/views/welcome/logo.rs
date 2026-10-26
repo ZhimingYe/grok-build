@@ -1,4 +1,6 @@
-//! The logo is hidden entirely on legacy Windows consoles: the ConHost raster fonts do not cover the U+2800 braille block, so it renders as tofu.
+// ZMY SELF-ADDED CODE START
+//! Homepage logo rendering is disabled in this fork on every terminal.
+// ZMY SELF-ADDED CODE END
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
@@ -72,10 +74,12 @@ fn pick_logo_for(window_height: u16, hidden: bool) -> Option<&'static str> {
     LogoTier::for_height_and_hidden(window_height, hidden).art()
 }
 
-/// The braille art has no ASCII stand-in; see the module doc.
+// ZMY SELF-ADDED CODE START
+/// Hide homepage branding in this fork, including its layout space and animation.
 fn logo_hidden() -> bool {
-    crate::glyphs::is_legacy_windows_console()
+    true
 }
+// ZMY SELF-ADDED CODE END
 
 fn non_empty_lines(logo: &str) -> impl Iterator<Item = &str> {
     logo.lines().filter(|l| !l.is_empty())
@@ -202,6 +206,11 @@ pub fn render_logo(area: Rect, buf: &mut Buffer, theme: &Theme, window_height: u
 
 /// Paint the tier the layout reserved rows for, so the art can never outgrow its slot.
 pub fn render_logo_tier(area: Rect, buf: &mut Buffer, theme: &Theme, tier: LogoTier) {
+    // ZMY SELF-ADDED CODE START
+    if logo_hidden() {
+        return;
+    }
+    // ZMY SELF-ADDED CODE END
     if let Some(logo) = tier.art() {
         render_into(area, buf, theme, logo);
     }
@@ -252,6 +261,32 @@ pub fn render_compact_logo(area: Rect, buf: &mut Buffer, theme: &Theme) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ZMY SELF-ADDED CODE START
+    #[test]
+    fn fork_homepage_logo_is_hidden_in_every_layout() {
+        for height in [0, 22, 26, 50, u16::MAX] {
+            assert_eq!(LogoTier::for_height(height), LogoTier::Hidden);
+            assert_eq!(logo_line_count(height), 0);
+        }
+        assert_eq!(full_logo_line_count(), 0);
+        assert_eq!(full_logo_visual_width(), 0);
+        assert_eq!(compact_logo_line_count(), 0);
+        assert_eq!(shimmer_frame(), 0);
+
+        let area = Rect::new(0, 0, 100, 50);
+        let blank = Buffer::empty(area);
+        let mut buffer = blank.clone();
+        let theme = Theme::current();
+        render_logo(area, &mut buffer, &theme, area.height);
+        render_full_logo(area, &mut buffer, &theme);
+        render_compact_logo(area, &mut buffer, &theme);
+        for tier in [LogoTier::Full, LogoTier::Compact, LogoTier::Hidden] {
+            render_logo_tier(area, &mut buffer, &theme, tier);
+        }
+        assert_eq!(buffer, blank);
+    }
+    // ZMY SELF-ADDED CODE END
 
     #[test]
     fn logo_sizes_by_height() {
