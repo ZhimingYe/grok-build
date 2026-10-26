@@ -557,7 +557,9 @@ mod tests {
         preset.insert(SESSION_ID_HEADER.to_string(), "caller-set".to_string());
         let cfg = ImageGenConfig::Enabled {
             api_key: Some("k".into()),
-            base_url: "https://api.x.ai/v1".into(),
+            // ZMY SELF-ADDED CODE START
+            base_url: "https://provider.example/v1".into(),
+            // ZMY SELF-ADDED CODE END
             extra_headers: preset,
             image_gen_enabled: true,
             image_edit_enabled: true,
@@ -572,7 +574,9 @@ mod tests {
 
         let cfg_plain = ImageGenConfig::Enabled {
             api_key: Some("k".into()),
-            base_url: "https://api.x.ai/v1".into(),
+            // ZMY SELF-ADDED CODE START
+            base_url: "https://provider.example/v1".into(),
+            // ZMY SELF-ADDED CODE END
             extra_headers: indexmap::IndexMap::new(),
             image_gen_enabled: true,
             image_edit_enabled: true,
@@ -595,7 +599,9 @@ mod tests {
     async fn post_json_attaches_session_and_bearer_headers() {
         let cfg = ImageGenConfig::Enabled {
             api_key: Some("k".into()),
-            base_url: "https://api.x.ai/v1".into(),
+            // ZMY SELF-ADDED CODE START
+            base_url: "https://provider.example/v1".into(),
+            // ZMY SELF-ADDED CODE END
             extra_headers: indexmap::IndexMap::new(),
             image_gen_enabled: true,
             image_edit_enabled: true,
@@ -607,7 +613,13 @@ mod tests {
             .unwrap()
             .with_session_id("sess-42");
         let req = client
-            .post_json("https://api.x.ai/v1/images", &serde_json::json!({}), "tok")
+            // ZMY SELF-ADDED CODE START
+            .post_json(
+                "https://provider.example/v1/images",
+                &serde_json::json!({}),
+                "tok",
+            )
+            // ZMY SELF-ADDED CODE END
             .build()
             .unwrap();
         assert_eq!(
@@ -628,7 +640,9 @@ mod tests {
     fn client_selects_model_from_override() {
         let mk = |model_override: Option<&str>| ImageGenConfig::Enabled {
             api_key: Some("k".into()),
-            base_url: "https://api.x.ai/v1".into(),
+            // ZMY SELF-ADDED CODE START
+            base_url: "https://provider.example/v1".into(),
+            // ZMY SELF-ADDED CODE END
             extra_headers: indexmap::IndexMap::new(),
             image_gen_enabled: true,
             image_edit_enabled: true,
@@ -659,7 +673,9 @@ mod tests {
     fn client_selects_edit_model_from_override() {
         let mk = |edit_model_override: Option<&str>| ImageGenConfig::Enabled {
             api_key: Some("k".into()),
-            base_url: "https://api.x.ai/v1".into(),
+            // ZMY SELF-ADDED CODE START
+            base_url: "https://provider.example/v1".into(),
+            // ZMY SELF-ADDED CODE END
             extra_headers: indexmap::IndexMap::new(),
             image_gen_enabled: true,
             image_edit_enabled: true,

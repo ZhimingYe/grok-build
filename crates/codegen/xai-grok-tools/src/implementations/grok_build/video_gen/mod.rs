@@ -1461,7 +1461,9 @@ mod tests {
     async fn request_attaches_session_and_bearer_headers() {
         let cfg = VideoGenConfig::Enabled {
             api_key: Some("k".into()),
-            base_url: "https://api.x.ai/v1".into(),
+            // ZMY SELF-ADDED CODE START
+            base_url: "https://provider.example/v1".into(),
+            // ZMY SELF-ADDED CODE END
             extra_headers: indexmap::IndexMap::new(),
             zdr_video_output_s3: None,
             tier_restricted: false,
@@ -1471,7 +1473,13 @@ mod tests {
             .unwrap()
             .with_session_id("sess-7");
         let req = client
-            .request(reqwest::Method::POST, "https://api.x.ai/v1/videos", "tok")
+            // ZMY SELF-ADDED CODE START
+            .request(
+                reqwest::Method::POST,
+                "https://provider.example/v1/videos",
+                "tok",
+            )
+            // ZMY SELF-ADDED CODE END
             .build()
             .unwrap();
         assert_eq!(
