@@ -1,7 +1,9 @@
 [package]
 license = "Apache-2.0"
 name = "xai-grok-shell"
-version = "1.0.45"
+# ZMY SELF-ADDED CODE START
+version = "1.0.45+zhimingye.2"
+# ZMY SELF-ADDED CODE END
 edition.workspace = true
 
 [features]
