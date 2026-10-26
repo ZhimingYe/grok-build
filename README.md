@@ -15,6 +15,13 @@ lightbuild 是基于 **Grok Build** 的独立 fork，遵循 **Apache License, Ve
 - **自动化**：通过 headless 模式在脚本中运行任务，或通过 ACP 与客户端集成。
 - **扩展与权限**：支持 MCP、skills、plugins、hooks，以及工具权限和沙箱配置。
 
+## 自定义更改
+
+lightbuild 在上游基础上包含以下自定义更改：
+
+1. **支持 `max` 思考档位**：支持通过 `--reasoning-effort max`（或 `--effort max`）选择最高思考档位，也可在交互界面使用 `/effort max`。实际可选档位与效果取决于模型及服务端支持，并非所有模型都支持 `max`。
+2. **移除遥测上报**：在 fork 的能力策略中禁用遥测与错误上报，包括产品事件、Mixpanel、内置及外部 OpenTelemetry 导出和 Sentry 错误上报。此处指禁用远程上报，并不代表删除所有相关源码或本地调试日志，也不影响用户主动配置的模型 API 请求。
+
 ## 获取与构建
 
 发布产物（如有）见 [lightbuild Releases](https://github.com/ZhimingYe/lightbuild/releases)。也可以直接从源码构建。
