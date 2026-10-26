@@ -4,6 +4,44 @@ use super::*;
 use crate::error::RefreshTokenError;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
+// ZMY SELF-ADDED CODE START
+#[tokio::test]
+#[serial_test::serial]
+async fn fork_official_cached_auth_is_refused_without_deleting_credentials() {
+    use xai_grok_test_support::EnvGuard;
+
+    let _auth = EnvGuard::unset("GROK_AUTH");
+    let _auth_path = EnvGuard::unset("GROK_AUTH_PATH");
+    let _xai = EnvGuard::unset("XAI_API_KEY");
+    let _legacy = EnvGuard::unset("GROK_CODE_XAI_API_KEY");
+    let dir = tempfile::tempdir().unwrap();
+    let config = GrokComConfig::default();
+    let scope = config.auth_scope();
+    let auth = GrokAuth {
+        key: "cached-official-token".into(),
+        auth_mode: AuthMode::Oidc,
+        oidc_issuer: Some(crate::config::XAI_OAUTH2_ISSUER.to_owned()),
+        refresh_token: Some("cached-official-refresh-token".into()),
+        ..GrokAuth::test_default()
+    };
+    let mut store = AuthStore::new();
+    store.insert(scope.clone(), auth.clone());
+    write_auth_json(&dir.path().join("auth.json"), &store).unwrap();
+
+    let manager = Arc::new(AuthManager::new(dir.path(), config));
+
+    assert!(manager.current().is_none());
+    assert!(matches!(
+        manager.auth().await.unwrap_err(),
+        AuthError::OfficialServicesDisabled
+    ));
+    let stored = read_auth_json(&dir.path().join("auth.json")).unwrap();
+    assert_eq!(
+        stored.get(&scope).map(|stored| stored.key.as_str()),
+        Some(auth.key.as_str())
+    );
+}
+// ZMY SELF-ADDED CODE END
 fn make_auth(expires_at: Option<DateTime<Utc>>, create_time: DateTime<Utc>) -> GrokAuth {
     GrokAuth {
         auth_mode: AuthMode::External,

@@ -42,6 +42,11 @@ pub fn sync_source_cache(
     branch: Option<&str>,
     cache_root: &Path,
 ) -> Result<PathBuf, String> {
+    // ZMY SELF-ADDED CODE START
+    if crate::is_official_source_url(url) {
+        return Err("official xAI marketplace sources are disabled in this fork".to_owned());
+    }
+    // ZMY SELF-ADDED CODE END
     let lease = sync_source_cache_with_mode(url, branch, cache_root, SyncMode::UseTtl)?;
     Ok(lease.path.clone())
 }
@@ -61,6 +66,11 @@ pub fn sync_source_cache_with_mode(
     cache_root: &Path,
     mode: SyncMode,
 ) -> Result<SourceCacheLease, String> {
+    // ZMY SELF-ADDED CODE START
+    if crate::is_official_source_url(url) {
+        return Err("official xAI marketplace sources are disabled in this fork".to_owned());
+    }
+    // ZMY SELF-ADDED CODE END
     let _sync_span = tracing::info_span!("marketplace.source_sync").entered();
     let url = xai_grok_agent::plugins::git_install::validate_git_url(url)?;
     let branch = branch
@@ -1036,4 +1046,24 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+
+    // ZMY SELF-ADDED CODE START
+    #[test]
+    fn fork_official_marketplace_is_rejected_before_cache_or_git() {
+        let cache_root = tempfile::tempdir().unwrap();
+        let result = sync_source_cache_with_mode(
+            crate::OFFICIAL_SOURCE_GIT_URL,
+            None,
+            cache_root.path(),
+            SyncMode::Force,
+        );
+        assert!(
+            result.is_err_and(|error| {
+                error.contains("official xAI marketplace sources are disabled")
+            }),
+            "official source must fail before attempting git"
+        );
+        assert_eq!(std::fs::read_dir(cache_root.path()).unwrap().count(), 0);
+    }
+    // ZMY SELF-ADDED CODE END
 }

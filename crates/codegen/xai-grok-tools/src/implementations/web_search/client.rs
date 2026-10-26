@@ -193,6 +193,13 @@ impl WebSearchClient {
         query: &str,
         allowed_domains: Option<Vec<String>>,
     ) -> Result<(String, Vec<String>), xai_tool_runtime::ToolError> {
+        // ZMY SELF-ADDED CODE START
+        if xai_grok_env::is_official_service_url(&self.base_url) {
+            return Err(xai_tool_runtime::ToolError::invalid_arguments(
+                xai_grok_env::OFFICIAL_SERVICES_DISABLED,
+            ));
+        }
+        // ZMY SELF-ADDED CODE END
         let (allowed, excluded) = self.resolve_filters(allowed_domains);
         let request = self.build_request_json(query, allowed, excluded)?;
         let url = format!("{}/responses", self.base_url.trim_end_matches('/'));
@@ -258,6 +265,13 @@ impl WebSearchClient {
         query: &str,
         allowed_domains: Option<Vec<String>>,
     ) -> Result<(String, Vec<(String, String)>), xai_tool_runtime::ToolError> {
+        // ZMY SELF-ADDED CODE START
+        if xai_grok_env::is_official_service_url(&self.base_url) {
+            return Err(xai_tool_runtime::ToolError::invalid_arguments(
+                xai_grok_env::OFFICIAL_SERVICES_DISABLED,
+            ));
+        }
+        // ZMY SELF-ADDED CODE END
         let (allowed, excluded) = self.resolve_filters(allowed_domains);
         let request = self.build_request_json(query, allowed, excluded)?;
         let url = format!("{}/responses", self.base_url.trim_end_matches('/'));

@@ -19,6 +19,20 @@ pub const ENV_GROK_EXTRA_CA_BUNDLE: &str = "GROK_EXTRA_CA_BUNDLE";
 
 pub const ENV_SSL_CERT_FILE: &str = "SSL_CERT_FILE";
 
+// ZMY SELF-ADDED CODE START
+fn official_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        if xai_grok_env::is_official_service_url(attempt.url().as_str())
+            || attempt.previous().len() >= 10
+        {
+            attempt.stop()
+        } else {
+            attempt.follow()
+        }
+    })
+}
+// ZMY SELF-ADDED CODE END
+
 /// ring on Windows ARM64: aws-lc-sys's jitterentropy is miscompiled for that target and overflows the stack on the first TLS handshake (xai-org/plugin-marketplace#426).
 const IS_RING_TARGET: bool = cfg!(all(windows, target_arch = "aarch64"));
 
@@ -56,10 +70,12 @@ pub fn build_reqwest_client(
     configure: impl Fn(reqwest::ClientBuilder) -> reqwest::ClientBuilder,
 ) -> reqwest::Result<reqwest::Client> {
     ensure_default_crypto_provider();
-    let mut builder = configure(reqwest::Client::builder())
+    // ZMY SELF-ADDED CODE START
+    let mut builder = configure(reqwest::Client::builder().redirect(official_redirect_policy()))
         .use_rustls_tls()
         .tls_built_in_native_certs(false)
         .tls_built_in_webpki_certs(true);
+    // ZMY SELF-ADDED CODE END
     for cert in shared_reqwest_roots() {
         builder = builder.add_root_certificate(cert);
     }
@@ -72,10 +88,13 @@ pub fn build_blocking_reqwest_client(
     configure: impl Fn(reqwest::blocking::ClientBuilder) -> reqwest::blocking::ClientBuilder,
 ) -> reqwest::Result<reqwest::blocking::Client> {
     ensure_default_crypto_provider();
-    let mut builder = configure(reqwest::blocking::Client::builder())
-        .use_rustls_tls()
-        .tls_built_in_native_certs(false)
-        .tls_built_in_webpki_certs(true);
+    // ZMY SELF-ADDED CODE START
+    let mut builder =
+        configure(reqwest::blocking::Client::builder().redirect(official_redirect_policy()))
+            .use_rustls_tls()
+            .tls_built_in_native_certs(false)
+            .tls_built_in_webpki_certs(true);
+    // ZMY SELF-ADDED CODE END
     for cert in shared_reqwest_roots() {
         builder = builder.add_root_certificate(cert);
     }

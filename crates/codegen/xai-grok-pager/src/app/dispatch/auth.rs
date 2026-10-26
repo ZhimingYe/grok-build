@@ -378,8 +378,9 @@ pub(super) fn handle_auth_complete(
         if app.usage_visible {
             effects.push(Effect::FetchAppBilling { nonce: 0 });
         }
-        // Fetch changelog (mirrors startup path for interactive login).
-        effects.push(Effect::FetchChangelog);
+        // ZMY SELF-ADDED CODE START
+        // Upstream changelog refreshes are disabled in this distribution.
+        // ZMY SELF-ADDED CODE END
 
         // ZDR-blocked users stay on the welcome screen; discard any deferred startup (they cannot start a session)
         if app.is_zdr_blocked() {

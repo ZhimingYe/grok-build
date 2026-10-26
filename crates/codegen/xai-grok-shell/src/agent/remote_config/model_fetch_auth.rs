@@ -20,9 +20,47 @@ pub(crate) fn models_fetch_enabled(
     endpoints: &config::EndpointsConfig,
     auth: Option<&GrokAuth>,
 ) -> bool {
-    (endpoints.has_custom_endpoint() && external_provider_auth(auth).is_some())
-        || crate::util::config::resolve_remote_fetch_enabled()
+    // ZMY SELF-ADDED CODE START
+    if endpoints.has_custom_endpoint() {
+        let endpoint = endpoints.resolve_models_list_url();
+        return custom_models_endpoint_fetch_enabled(
+            &endpoint,
+            xai_grok_config::resolve_remote_fetch_enabled_with_distribution(
+                xai_grok_config::Distribution::STOCK,
+            ),
+        );
+    }
+    let _ = auth;
+    crate::util::config::resolve_remote_fetch_enabled()
+    // ZMY SELF-ADDED CODE END
 }
+
+// ZMY SELF-ADDED CODE START
+fn custom_models_endpoint_fetch_enabled(endpoint: &str, policy_enabled: bool) -> bool {
+    policy_enabled && !xai_grok_env::is_official_service_url(endpoint)
+}
+
+#[cfg(test)]
+mod fork_tests {
+    use super::custom_models_endpoint_fetch_enabled;
+
+    #[test]
+    fn fork_custom_models_endpoint_policy_excludes_official_and_honors_user_policy() {
+        assert!(custom_models_endpoint_fetch_enabled(
+            "https://models.example/v1/models",
+            true
+        ));
+        assert!(!custom_models_endpoint_fetch_enabled(
+            "https://api.x.ai/v1/models",
+            true
+        ));
+        assert!(!custom_models_endpoint_fetch_enabled(
+            "http://localhost:8080/v1/models",
+            false
+        ));
+    }
+}
+// ZMY SELF-ADDED CODE END
 
 /// Credential for `/v1/models` fetching.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

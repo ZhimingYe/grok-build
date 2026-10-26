@@ -140,6 +140,12 @@ fn filter_sources_by_allowlist(
     managed_pins: &[xai_grok_workspace::permission::resolution::ManagedMarketplace],
 ) -> Vec<MarketplaceSource> {
     use xai_grok_workspace::permission::resolution::ManagedMarketplaceKind;
+    // ZMY SELF-ADDED CODE START
+    sources.retain(|(source, _)| {
+        !matches!(&source.kind, SourceKind::Git { url, .. }
+            if xai_grok_plugin_marketplace::is_official_source_url(url))
+    });
+    // ZMY SELF-ADDED CODE END
     if allowlist.is_restricted() {
         sources.retain(|(source, origin)| match &source.kind {
             SourceKind::Git { url, .. } => {

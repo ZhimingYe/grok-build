@@ -1,4 +1,3 @@
-use crate::app::actions::Action;
 use crate::slash::command::{CommandExecCtx, CommandResult, SlashCommand, slash_meta};
 
 pub struct ReleaseNotesCommand;
@@ -12,14 +11,9 @@ impl SlashCommand for ReleaseNotesCommand {
     }
 
     fn run(&self, _ctx: &mut CommandExecCtx, _args: &str) -> CommandResult {
-        let changelog = xai_grok_shell::util::changelog::ChangelogManager::new().fetch();
-        match changelog.markdown {
-            Some(content) => CommandResult::Action(Action::ShowReleaseNotes {
-                title: "Release Notes".to_string(),
-                content: content.trim().to_string(),
-            }),
-            None => CommandResult::Error("No release notes available (offline).".to_string()),
-        }
+        // ZMY SELF-ADDED CODE START
+        CommandResult::Error(xai_grok_env::OFFICIAL_SERVICES_DISABLED.to_owned())
+        // ZMY SELF-ADDED CODE END
     }
 }
 

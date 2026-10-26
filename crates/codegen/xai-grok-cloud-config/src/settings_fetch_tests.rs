@@ -64,8 +64,34 @@ async fn settings_fetch_maps_status_to_outcome() {
         let got = match outcome {
             SettingsFetch::Fetched(_) => "Fetched",
             SettingsFetch::Rejected => "Rejected",
+            // ZMY SELF-ADDED CODE START
+            SettingsFetch::Withheld => "Withheld",
+            // ZMY SELF-ADDED CODE END
             SettingsFetch::Retry => "Retry",
         };
         assert_eq!(got, expected, "status {status}, body {body:?}");
     }
 }
+
+// ZMY SELF-ADDED CODE START
+#[test]
+fn fork_settings_fetch_is_disabled_without_transport() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind probe listener");
+    listener
+        .set_nonblocking(true)
+        .expect("make probe listener nonblocking");
+    let base = format!(
+        "http://{}",
+        listener.local_addr().expect("read probe address")
+    );
+    let outcome = fetch_settings_blocking(&base, &GrokAuth::test_default(), None);
+    assert!(matches!(outcome, SettingsFetch::Withheld));
+    assert!(
+        matches!(
+            listener.accept(),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
+        ),
+        "withheld settings fetch must not open a connection"
+    );
+}
+// ZMY SELF-ADDED CODE END

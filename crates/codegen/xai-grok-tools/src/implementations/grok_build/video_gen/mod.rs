@@ -181,6 +181,13 @@ impl VideoGenClient {
                 "Cannot create VideoGenClient from disabled config",
             ));
         };
+        // ZMY SELF-ADDED CODE START
+        if xai_grok_env::is_official_service_url(base_url) {
+            return Err(xai_tool_runtime::ToolError::invalid_arguments(
+                xai_grok_env::OFFICIAL_SERVICES_DISABLED,
+            ));
+        }
+        // ZMY SELF-ADDED CODE END
 
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
@@ -517,6 +524,13 @@ impl VideoGenClient {
 
     /// Download video bytes from a pre-signed temporary URL (no auth headers).
     async fn download_video(&self, url: &str) -> Result<Vec<u8>, xai_tool_runtime::ToolError> {
+        // ZMY SELF-ADDED CODE START
+        if xai_grok_env::is_official_service_url(url) {
+            return Err(xai_tool_runtime::ToolError::invalid_arguments(
+                xai_grok_env::OFFICIAL_SERVICES_DISABLED,
+            ));
+        }
+        // ZMY SELF-ADDED CODE END
         let response = self.download_http.get(url).send().await.map_err(|e| {
             xai_tool_runtime::ToolError::invalid_arguments(format!("Failed to download video: {e}"))
         })?;

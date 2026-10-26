@@ -76,6 +76,11 @@ impl WorkspacesClient {
     }
 
     pub(crate) async fn list_workspaces(&self, q: &WsQuery) -> Result<ListWorkspacesPage, WsError> {
+        // ZMY SELF-ADDED CODE START
+        if xai_grok_env::is_official_service_url(&self.base_url) {
+            return Err(WsError::NoOauth);
+        }
+        // ZMY SELF-ADDED CODE END
         let auth = self.auth.auth().await.map_err(|_| WsError::NoOauth)?;
         if !auth.is_xai_auth() {
             return Err(WsError::NoOauth);

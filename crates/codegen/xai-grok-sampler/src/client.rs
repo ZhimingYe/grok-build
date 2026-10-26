@@ -508,6 +508,13 @@ impl SamplingClient {
     /// Uses an identity-specific client for configured mTLS; otherwise grabs the process-wide shared client.
     /// This does not perform any network I/O.
     pub fn new(config: SamplerConfig) -> Result<Self> {
+        // ZMY SELF-ADDED CODE START
+        if xai_grok_env::is_official_service_url(&config.base_url) {
+            return Err(SamplingError::InvalidConfiguration(
+                "official Grok/xAI services are disabled in this fork",
+            ));
+        }
+        // ZMY SELF-ADDED CODE END
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         if let Some(ref api_key) = config.api_key {
@@ -2343,6 +2350,18 @@ mod tests {
             ..Default::default()
         }
     }
+
+    // ZMY SELF-ADDED CODE START
+    #[test]
+    fn fork_official_sampling_client_fails_before_transport_setup() {
+        let mut config = minimal_config();
+        config.base_url = "https://api.x.ai/v1".to_owned();
+        assert!(matches!(
+            SamplingClient::new(config),
+            Err(SamplingError::InvalidConfiguration(_))
+        ));
+    }
+    // ZMY SELF-ADDED CODE END
 
     /// The serialized StreamingChatRequest flattens all ChatCompletionRequest fields at top level.
     /// The wrapper adds `stream: true` and `stream_options.include_usage: true`.

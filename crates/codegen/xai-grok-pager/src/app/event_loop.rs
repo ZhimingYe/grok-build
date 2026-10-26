@@ -1690,10 +1690,9 @@ pub(crate) async fn run(
                 return Ok(finish_run(&mut app));
             }
         }
-        let effs = vec![super::actions::Effect::FetchChangelog];
-        if process_effects(effs, &mut tasks, &mut app, &progress_tx) {
-            return Ok(finish_run(&mut app));
-        }
+        // ZMY SELF-ADDED CODE START
+        // Upstream changelogs are disabled in this distribution; do not schedule a refresh.
+        // ZMY SELF-ADDED CODE END
         if !app.has_access() {
             gate_poll_at = Some(Instant::now() + GATE_POLL_INTERVAL);
         }

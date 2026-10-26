@@ -75,6 +75,16 @@ impl ChangelogManager {
     /// Either field may be `None` if offline with no cache. When `GROK_CHANGELOG_OFFLINE` is set (PTY / integration tests), the CDN is skipped and only the disk cache is read.
     /// JSON is cached only after a successful parse; the markdown cache is write-through since it's consumed as raw text.
     pub fn fetch(&self) -> Changelog {
+        // ZMY SELF-ADDED CODE START
+        if !xai_grok_config::Distribution::current()
+            .allows(xai_grok_config::Capability::RemoteFetch)
+        {
+            return Changelog {
+                markdown: None,
+                entries: None,
+            };
+        }
+        // ZMY SELF-ADDED CODE END
         // Always re-resolve from env so a caller holding an older manager (or a stale OnceLock) still reads the live harness home
         Self::from_env_home().fetch_with(changelog_offline(), CHANGELOG_BASE)
     }
@@ -243,6 +253,25 @@ mod tests {
         };
         assert_eq!(entry.description, "seeded entry");
     }
+
+    // ZMY SELF-ADDED CODE START
+    #[test]
+    fn fork_fetch_ignores_preseeded_changelog_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("grok-home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("CHANGELOG.md"), "# stale release notes\n").unwrap();
+        std::fs::write(
+            home.join("CHANGELOG.json"),
+            r#"[{"category":"features","description":"stale promo"}]"#,
+        )
+        .unwrap();
+
+        let changelog = manager_for(&home).fetch();
+        assert!(changelog.markdown.is_none());
+        assert!(changelog.entries.is_none());
+    }
+    // ZMY SELF-ADDED CODE END
 
     #[test]
     fn cdn_miss_falls_back_to_env_home_disk_cache() {

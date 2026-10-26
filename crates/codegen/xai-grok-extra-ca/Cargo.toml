@@ -6,6 +6,9 @@ edition.workspace = true
 description = "TLS policy for the grok CLI: rustls backend pin, process crypto provider, shared root store, and opt-in GROK_EXTRA_CA_BUNDLE roots"
 
 [dependencies]
+# ZMY SELF-ADDED CODE START
+xai-grok-env = { workspace = true }
+# ZMY SELF-ADDED CODE END
 base64 = { workspace = true }
 # Not reqwest 0.13: blocking TLS overflows on Windows arm64 (#237643).
 # native-roots + webpki-roots must ship with this crate or a broken OS store fails client build.

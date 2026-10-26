@@ -92,6 +92,13 @@ impl ImageGenClient {
                 "Cannot create ImageGenClient from disabled config",
             ));
         };
+        // ZMY SELF-ADDED CODE START
+        if xai_grok_env::is_official_service_url(base_url) {
+            return Err(xai_tool_runtime::ToolError::invalid_arguments(
+                xai_grok_env::OFFICIAL_SERVICES_DISABLED,
+            ));
+        }
+        // ZMY SELF-ADDED CODE END
         let model = model_override
             .clone()
             .filter(|m| !m.trim().is_empty())
@@ -226,6 +233,13 @@ impl ImageGenClient {
         prompt: &str,
         aspect_ratio: &str,
     ) -> Result<Vec<u8>, xai_tool_runtime::ToolError> {
+        // ZMY SELF-ADDED CODE START
+        if xai_grok_env::is_official_service_url(&self.base_url) {
+            return Err(xai_tool_runtime::ToolError::invalid_arguments(
+                xai_grok_env::OFFICIAL_SERVICES_DISABLED,
+            ));
+        }
+        // ZMY SELF-ADDED CODE END
         let url = format!("{}/images/generations", self.base_url.trim_end_matches('/'));
 
         let payload = serde_json::json!({

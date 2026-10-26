@@ -107,6 +107,11 @@ impl ChatModelsClient {
         &self,
         locale: &str,
     ) -> Result<ListModesResponse, ChatModelsError> {
+        // ZMY SELF-ADDED CODE START
+        if xai_grok_env::is_official_service_url(&self.base_url) {
+            return Err(ChatModelsError::NoAuth);
+        }
+        // ZMY SELF-ADDED CODE END
         let auth = self
             .auth
             .auth()

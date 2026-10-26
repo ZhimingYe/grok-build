@@ -117,7 +117,12 @@ pub use paths::{
     sessions_cwd_dir_in, set_dir_owner_only, system_config_dir, user_grok_home,
 };
 pub use remote_announcement::{AnnouncementCta, RemoteAnnouncement};
-pub use remote_fetch::{remote_fetch_enabled_from_layers, resolve_remote_fetch_enabled};
+// ZMY SELF-ADDED CODE START
+pub use remote_fetch::{
+    remote_fetch_enabled_from_layers, remote_fetch_enabled_from_layers_with_distribution,
+    resolve_remote_fetch_enabled, resolve_remote_fetch_enabled_with_distribution,
+};
+// ZMY SELF-ADDED CODE END
 pub use remote_settings::{
     CampaignOverride, ConsentGate, ContextualHintsRemote, DoomLoopRecoverySettings, GoalRoleModel,
     LongReasoningReminderSettings, RemoteRequestEncoding, RemoteSettings, WorktreeAutoGcSettings,

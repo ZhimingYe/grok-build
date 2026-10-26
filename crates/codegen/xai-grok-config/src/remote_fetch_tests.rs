@@ -162,3 +162,21 @@ fn a_distribution_that_withholds_remote_fetch_beats_every_layer() {
         [Some(&on), None]
     ));
 }
+
+// ZMY SELF-ADDED CODE START
+#[test]
+fn fork_custom_remote_fetch_uses_stock_capability_but_keeps_explicit_policy() {
+    let layers = ConfigLayers::default();
+    assert!(remote_fetch_enabled_from_layers_with_distribution(
+        &layers,
+        Distribution::STOCK
+    ));
+    assert!(!remote_fetch_enabled_from_layers_with_distribution(
+        &ConfigLayers {
+            user: features_remote_fetch(false),
+            ..ConfigLayers::default()
+        },
+        Distribution::STOCK
+    ));
+}
+// ZMY SELF-ADDED CODE END

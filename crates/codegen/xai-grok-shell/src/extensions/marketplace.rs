@@ -674,6 +674,19 @@ async fn handle_add_source(url: &str) -> xai_hooks_plugins_types::ActionOutcome 
     let cwd = std::env::current_dir().unwrap_or_default();
     let input = plugin::classify_marketplace_add_input(url, &cwd);
 
+    // ZMY SELF-ADDED CODE START
+    if matches!(&input, MarketplaceAddInput::GitUrl(git_url)
+        if xai_grok_plugin_marketplace::is_official_source_url(git_url))
+    {
+        return ActionOutcome {
+            status: OutcomeStatus::ValidationError,
+            message: xai_grok_env::OFFICIAL_SERVICES_DISABLED.to_owned(),
+            requires_reload: false,
+            requires_restart: false,
+        };
+    }
+    // ZMY SELF-ADDED CODE END
+
     // Fail fast on a missing local path: stored as a git URL, it would only error after network clone attempts
     if let MarketplaceAddInput::LocalPath(path) = &input
         && !path.is_dir()
@@ -1102,101 +1115,11 @@ fn ensure_official_marketplace_source_with(
     grok_home: &std::path::Path,
     policy: &xai_grok_workspace::permission::resolution::MarketplacePolicy,
 ) {
-    let config_path = grok_home.join("config.toml");
-
-    if read_official_marketplace_auto_installed(&config_path) {
-        return;
-    }
-
-    // Auto-register is a `marketplace add` on the user's behalf: it fails closed against every
-    // strict list; the flag stays unset so the register retries if the policy lifts.
-    if policy
-        .add_block_reason(xai_grok_plugin_marketplace::OFFICIAL_SOURCE_GIT_URL)
-        .is_some()
-    {
-        // Log the full-path reason (the add gate's refusal reduces the
-        // policy file to its name for users).
-        tracing::info!(
-            reason = %policy.block_reason(
-                xai_grok_plugin_marketplace::OFFICIAL_SOURCE_GIT_URL,
-                xai_grok_workspace::permission::resolution::PolicySubjectOrigin::Foreign,
-            ),
-            "skipping official marketplace auto-register: blocked by marketplace policy"
-        );
-        return;
-    }
-
-    let _lock = match acquire_init_lock(grok_home) {
-        Ok(f) => f,
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                path = %grok_home.join(".config-init.lock").display(),
-                "skipping official marketplace auto-register: failed to acquire init lock"
-            );
-            return;
-        }
-    };
-
-    // Re-check under the lock: another process may have registered meanwhile.
-    if read_official_marketplace_auto_installed(&config_path) {
-        return;
-    }
-
-    let raw = match crate::util::config::read_to_string_or_empty(&config_path) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!(error = %e, "skipping official marketplace auto-register: cannot read config.toml");
-            return;
-        }
-    };
-    let parsed: toml::Value = match toml::from_str(&raw) {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(error = %e, "skipping official marketplace auto-register: invalid config.toml");
-            return;
-        }
-    };
-
-    // "Already present" means the official URL is in the config.toml sources or in a JSON store (settings.json, known_marketplaces.json) under grok_home
-    // The scan is scoped to grok_home only (not ~/.claude) to keep tests hermetic
-    // A user with the URL solely in ~/.claude gets one duplicate entry that the UI dedupes by URL
-    let toml_sources = xai_grok_plugin_marketplace::load_sources(&parsed);
-    let json_sources = xai_grok_plugin_marketplace::load_extra_sources_from_settings_in(
-        &toml_sources,
-        std::slice::from_ref(&grok_home.to_path_buf()),
-    );
-    let already_present = toml_sources.iter().chain(json_sources.iter()).any(|s| {
-        matches!(&s.kind, xai_grok_plugin_marketplace::SourceKind::Git { url, .. }
-            if xai_grok_plugin_marketplace::is_official_source_url(url))
-    });
-
-    let write_result = if already_present {
-        // Already present: just set the flag.
-        set_official_marketplace_auto_installed(&config_path)
-    } else {
-        add_marketplace_source(
-            &config_path,
-            xai_grok_plugin_marketplace::OFFICIAL_SOURCE_NAME,
-            &crate::plugin::MarketplaceAddInput::GitUrl(
-                xai_grok_plugin_marketplace::OFFICIAL_SOURCE_GIT_URL.to_string(),
-            ),
-            true,
-        )
-    };
-
-    match write_result {
-        Ok(()) if !already_present => {
-            tracing::info!(
-                url = xai_grok_plugin_marketplace::OFFICIAL_SOURCE_GIT_URL,
-                "auto-registered official xAI marketplace source"
-            );
-        }
-        Ok(()) => {}
-        Err(e) => {
-            tracing::warn!(error = %e, "failed to auto-register official marketplace source");
-        }
-    }
+    // ZMY SELF-ADDED CODE START
+    let _ = (grok_home, policy);
+    tracing::debug!("official marketplace auto-registration is disabled in this fork");
+    // Removed official marketplace auto-registration to avoid restoring a vendor service source.
+    // ZMY SELF-ADDED CODE END
 }
 
 #[cfg(test)]

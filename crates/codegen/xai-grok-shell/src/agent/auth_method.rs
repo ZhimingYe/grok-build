@@ -76,8 +76,7 @@ pub struct AuthMethodsBuildInputs<'a> {
 }
 
 // ZMY SELF-ADDED CODE START
-pub(crate) const OPTIONAL_ACCOUNT_LOGIN_REQUIRED_MESSAGE: &str =
-    "No API key is configured. Set XAI_API_KEY or run `grok login` to sign in explicitly.";
+pub(crate) const OPTIONAL_ACCOUNT_LOGIN_REQUIRED_MESSAGE: &str = "No API key is configured. Set XAI_API_KEY, add a model API key, or configure a local/custom model endpoint.";
 
 pub(crate) fn optional_account_login_allowed(
     preferred_method: Option<PreferredAuthMethod>,
@@ -241,7 +240,10 @@ fn build_unpinned(
         has_enterprise_oidc,
         has_auth_provider_command,
         disable_api_key_auth,
-    ) && let Some(acp::AuthMethod::Agent(method)) = methods.last_mut()
+    ) && methods
+        .last()
+        .is_some_and(|method| AuthMethodKind::from_id(method.id()) == AuthMethodKind::GrokCom)
+        && let Some(acp::AuthMethod::Agent(method)) = methods.last_mut()
     {
         method
             .meta
@@ -269,9 +271,12 @@ fn push_interactive_login(
         let issuer = enterprise_oidc_issuer
             .expect("enterprise_oidc_issuer is required when has_enterprise_oidc is true");
         methods.push(oidc_auth_method(issuer, login_label));
-    } else {
+    // ZMY SELF-ADDED CODE START
+    } else if has_auth_provider_command {
+        // The built-in Grok login is not offered; only an explicitly configured provider may use this method.
         methods.push(grok_com_auth_method(login_label, has_auth_provider_command));
     }
+    // ZMY SELF-ADDED CODE END
 }
 
 /// ACP session auth method. Use `is_session_based_method` for classification.
@@ -369,8 +374,9 @@ pub(crate) fn method_id_after_cached_token_unavailable(
 pub const PREFERRED_API_KEY_UNAVAILABLE: &str = "preferred_method=api_key but no API key is configured (set XAI_API_KEY or model api_key/env_key in config.toml).";
 
 /// Error when `preferred_method=oidc` but the session path cannot proceed.
-pub const PREFERRED_OIDC_UNAVAILABLE: &str =
-    "preferred_method=oidc but no session is available. Run `grok login` to authenticate.";
+// ZMY SELF-ADDED CODE START
+pub const PREFERRED_OIDC_UNAVAILABLE: &str = "preferred_method=oidc but no session is available. Configure an external OIDC provider or a local/custom model endpoint.";
+// ZMY SELF-ADDED CODE END
 
 pub const XAI_API_KEY_METHOD_ID: &str = "xai.api_key";
 pub(crate) fn xai_api_key_auth_method() -> acp::AuthMethod {
@@ -606,8 +612,9 @@ mod tests {
         );
     }
 
-    /// Session-only user (no API key anywhere): cached_token first, then `grok.com`.
-    /// `auth_methods.first()` does NOT need interactive login, so this user also skips the login screen at startup.
+    // ZMY SELF-ADDED CODE START
+    /// A cached session token is retained, without advertising the default official login.
+    // ZMY SELF-ADDED CODE END
     #[test]
     fn session_only_user_first_method_is_cached_token() {
         let inputs = AuthMethodsBuildInputs {
@@ -631,17 +638,29 @@ mod tests {
     }
 
     // ZMY SELF-ADDED CODE START
-    /// Fresh users may opt into account login, but startup must not require it.
+    /// Fresh users are not offered the built-in official account login.
     #[test]
-    fn fresh_user_advertises_optional_grok_com_login() {
+    fn fork_fresh_user_has_no_official_login_method() {
         let built = build_auth_methods(default_inputs());
 
-        assert_eq!(first_kind(&built.methods), Some(AuthMethodKind::GrokCom));
+        assert!(built.methods.is_empty());
         assert!(built.default_auth_method_id.is_none());
-        assert_eq!(built.methods.len(), 1);
-        assert_eq!(
-            built.methods[0].meta().as_ref().unwrap()["optional_login"],
-            true
+    }
+
+    #[test]
+    fn fork_api_key_method_is_not_marked_as_optional_account_login() {
+        let built = build_auth_methods(AuthMethodsBuildInputs {
+            has_external_api_key: true,
+            ..default_inputs()
+        });
+
+        assert_eq!(method_ids(&built), vec![XAI_API_KEY_METHOD_ID]);
+        assert!(
+            built.methods[0]
+                .meta()
+                .as_ref()
+                .and_then(|meta| meta.get("optional_login"))
+                .is_none(),
         );
     }
 
@@ -687,18 +706,10 @@ mod tests {
     }
 
     #[test]
-    fn fork_api_key_auth_lockdown_keeps_default_login_required() {
-        let built = build_auth_methods(AuthMethodsBuildInputs {
-            disable_api_key_auth: true,
-            ..default_inputs()
-        });
-        let grok = built.methods.first().expect("grok.com login is advertised");
-        assert_eq!(first_kind(&built.methods), Some(AuthMethodKind::GrokCom));
-        assert!(
-            !grok
-                .meta()
-                .is_some_and(|meta| meta.get("optional_login").is_some()),
-        );
+    fn fork_no_key_has_no_official_login_method() {
+        let built = build_auth_methods(default_inputs());
+        assert!(built.methods.is_empty());
+        assert!(built.default_auth_method_id.is_none());
     }
     // ZMY SELF-ADDED CODE END
 
@@ -853,9 +864,11 @@ mod tests {
         assert_eq!(first_kind(&built.methods), Some(AuthMethodKind::XaiApiKey));
     }
 
+    // ZMY SELF-ADDED CODE START
     /// Admin kill switch (`disable_api_key_auth`): the predicate must return false even when credentials are available everywhere.
     /// That includes both the global env var and a per-model env_key.
-    /// The builder then never advertises `xai.api_key`, and the pager sends the user to the deployment's login method instead.
+    /// The builder then never advertises `xai.api_key`; no default Grok login is offered as a fallback.
+    // ZMY SELF-ADDED CODE END
     #[test]
     #[serial]
     fn disable_api_key_auth_suppresses_xai_api_key_method() {
@@ -880,13 +893,10 @@ mod tests {
                 .any(|m| AuthMethodKind::from_id(m.id()) == AuthMethodKind::XaiApiKey),
             "xai.api_key must not be advertised when disable_api_key_auth is set",
         );
-        assert_eq!(
-            first_kind(&built.methods),
-            Some(AuthMethodKind::GrokCom),
-            "with api-key auth disabled and no cached token, the login method \
-             must lead so the pager requires interactive login",
-        );
+        // ZMY SELF-ADDED CODE START
+        assert!(built.methods.is_empty());
         assert!(built.default_auth_method_id.is_none());
+        // ZMY SELF-ADDED CODE END
     }
 
     #[test]
@@ -908,7 +918,9 @@ mod tests {
             has_external_api_key: false,
             ..default_inputs()
         });
-        assert_eq!(first_kind(&built.methods), Some(AuthMethodKind::GrokCom));
+        // ZMY SELF-ADDED CODE START
+        assert!(built.methods.is_empty());
+        // ZMY SELF-ADDED CODE END
     }
 
     #[test]
@@ -975,24 +987,15 @@ mod tests {
         assert_eq!(read_xai_api_key_env().unwrap(), "new-key");
     }
 
-    // -- grok login --legacy regression coverage ------------------------ `grok login --legacy` produces a GrokAuth with `auth_mode: WebLogin`, `oidc_issuer: None`, and no `expires_at` (30-day hardcoded TTL)
-    // When this token is in the `GROK_AUTH` env var (or the legacy scope fallback in auth.json), `AuthManager::new` returns it from `current()`
-    // That feeds `has_cached_token = true` into `build_auth_methods`, which puts `cached_token` first `startup_auth_metadata()` then returns `needs_login = false`: legacy users get frictionless auth, no login screen This test pins the env-var path (highest priority in AuthManager) end-to-end
-
-    /// END-TO-END REGRESSION TEST for a legacy auth token (WebLogin, no expires_at) in the `GROK_AUTH` env var with no other auth available.
-    /// `AuthManager` MUST load it and `build_auth_methods` must advertise `cached_token` first.
-    /// The pager therefore skips the login screen (frictionless legacy auth).
+    // ZMY SELF-ADDED CODE START
+    /// Legacy WebLogin credentials from `GROK_AUTH` are refused and never advertised.
     #[test]
     #[serial]
-    fn grok_login_legacy_token_does_not_require_login() {
+    fn fork_legacy_grok_auth_from_env_is_not_loaded_or_advertised() {
         use xai_grok_login::{AuthManager, AuthMode, GrokAuth, GrokComConfig};
 
-        // Ensure clean slate for "no other auth available".
         let _g1 = EnvGuard::unset("GROK_AUTH_PATH");
         let _g2 = EnvGuard::unset(XAI_API_KEY_ENV_VAR);
-
-        // Construct a legacy-style token exactly as `grok login --legacy` produces it
-        // That means WebLogin mode, no OIDC fields, no refresh_token, no expires_at (is_expired falls back to the 30-day age check)
         let legacy_token = GrokAuth {
             key: "legacy-relay-token".into(),
             auth_mode: AuthMode::WebLogin,
@@ -1005,65 +1008,26 @@ mod tests {
             expires_at: None,
             ..GrokAuth::test_default()
         };
-
-        // Provide it via the GROK_AUTH env var (highest priority code path in AuthManager::new)
-        // This is the "legacy auth token exists in the env" case with no other auth
         let legacy_json = serde_json::to_string(&legacy_token).expect("serialize legacy token");
         let _g = EnvGuard::set("GROK_AUTH", &legacy_json);
 
-        // AuthManager picks it up from the env var directly (no file needed).
         let dir = tempfile::tempdir().unwrap();
         let cfg = GrokComConfig::default();
         let mgr = AuthManager::new(dir.path(), cfg);
-        let current = mgr.current();
-        assert!(
-            current.is_some(),
-            "legacy token in GROK_AUTH env MUST be loaded directly -- if this fails, \
-             users with legacy auth in env would be sent to the login screen",
-        );
-        assert_eq!(
-            current.as_ref().unwrap().key,
-            "legacy-relay-token",
-            "loaded token must match the one injected via env",
-        );
-
-        // Derive has_cached_token exactly as initialize() does
-        let has_cached_token = mgr.current().is_some();
-        assert!(has_cached_token);
-
-        // With only this legacy token (no xai api key), the first method must be cached_token so the pager skips the login screen
+        assert!(mgr.current().is_none());
         let built = build_auth_methods(AuthMethodsBuildInputs {
             has_external_api_key: false,
-            has_cached_token,
+            has_cached_token: mgr.current().is_some(),
             ..default_inputs()
         });
-
-        assert_eq!(
-            first_kind(&built.methods),
-            Some(AuthMethodKind::CachedToken),
-            "legacy token in env: cached_token MUST be auth_methods.first() \
-             (pager startup_auth_metadata returns needs_login=false)",
-        );
-        assert!(
-            built
-                .methods
-                .first()
-                .is_some_and(|m| !AuthMethodKind::from_id(m.id()).needs_interactive_login()),
-            "auth_methods.first() MUST NOT need interactive login when legacy token \
-             is in env -- prevents login screen regression",
-        );
-        assert_eq!(
-            built
-                .default_auth_method_id
-                .as_ref()
-                .map(|id| id.0.as_ref()),
-            Some(CACHED_TOKEN_AUTH_METHOD_ID),
-        );
+        assert!(built.methods.is_empty());
+        assert!(built.default_auth_method_id.is_none());
     }
+    // ZMY SELF-ADDED CODE END
 
-    /// Negative case for the legacy flow: when auth.json does NOT contain a legacy-scope entry, AuthManager::current() is None.
-    /// has_cached_token is then false and build_auth_methods advertises only the login method.
-    /// This pins the predicate's "no" answer so the test above isn't trivially passing.
+    // ZMY SELF-ADDED CODE START
+    /// With no cached token or API key, no default official login method is advertised.
+    // ZMY SELF-ADDED CODE END
     #[test]
     #[serial]
     fn no_legacy_token_means_no_cached_token_advertised() {
@@ -1083,11 +1047,9 @@ mod tests {
             has_cached_token: mgr.current().is_some(),
             ..default_inputs()
         });
-        assert_eq!(
-            first_kind(&built.methods),
-            Some(AuthMethodKind::GrokCom),
-            "no cached token AND no api key: pager must show login (grok.com first)",
-        );
+        // ZMY SELF-ADDED CODE START
+        assert!(built.methods.is_empty());
+        // ZMY SELF-ADDED CODE END
     }
 
     // ── preferred_method pin (fail-closed) ──────────────────────────────
@@ -1124,10 +1086,9 @@ mod tests {
             preferred_method: Some(PreferredAuthMethod::Oidc),
             ..default_inputs()
         });
-        assert_eq!(
-            method_ids(&built),
-            vec![CACHED_TOKEN_AUTH_METHOD_ID, GROK_COM_METHOD_ID]
-        );
+        // ZMY SELF-ADDED CODE START
+        assert_eq!(method_ids(&built), vec![CACHED_TOKEN_AUTH_METHOD_ID]);
+        // ZMY SELF-ADDED CODE END
         assert_eq!(default_id(&built), Some(CACHED_TOKEN_AUTH_METHOD_ID));
     }
 
@@ -1139,7 +1100,9 @@ mod tests {
             preferred_method: Some(PreferredAuthMethod::Oidc),
             ..default_inputs()
         });
-        assert_eq!(method_ids(&built), vec![GROK_COM_METHOD_ID]);
+        // ZMY SELF-ADDED CODE START
+        assert!(built.methods.is_empty());
+        // ZMY SELF-ADDED CODE END
         assert!(built.default_auth_method_id.is_none());
     }
 }

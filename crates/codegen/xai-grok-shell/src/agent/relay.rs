@@ -76,6 +76,13 @@ impl RelayConfig {
         alpha_test_key: Option<String>,
         auth_manager: Option<Arc<AuthManager>>,
     ) -> Option<Self> {
+        // ZMY SELF-ADDED CODE START
+        if !xai_grok_config::Distribution::current()
+            .allows(xai_grok_config::Capability::RemoteControl)
+        {
+            return None;
+        }
+        // ZMY SELF-ADDED CODE END
         if !session.is_xai_auth() || session.key.is_empty() {
             return None;
         }

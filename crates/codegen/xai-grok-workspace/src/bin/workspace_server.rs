@@ -370,6 +370,11 @@ async fn run(
         _ => false,
     };
     let url = Url::parse(&args.hub_url).map_err(|e| anyhow::anyhow!("invalid --hub-url: {e}"))?;
+    // ZMY SELF-ADDED CODE START
+    if xai_grok_env::is_official_service_url(url.as_str()) {
+        anyhow::bail!("{}", xai_grok_env::OFFICIAL_SERVICES_DISABLED);
+    }
+    // ZMY SELF-ADDED CODE END
     {
         use xai_grok_sandbox::{ProfileName, SandboxManager};
         let profile = match std::env::var("GROK_SANDBOX_PROFILE").ok() {

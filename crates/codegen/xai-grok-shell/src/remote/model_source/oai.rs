@@ -28,6 +28,13 @@ impl ModelSource for OaiModelSource {
         self.endpoint.url.clone()
     }
     fn fetch(&self, auth: Option<&GrokAuth>) -> Result<FetchModelsResult, BackendError> {
+        // ZMY SELF-ADDED CODE START
+        if xai_grok_env::is_official_service_url(&self.endpoint.url) {
+            return Err(BackendError::Auth(
+                xai_grok_env::OFFICIAL_SERVICES_DISABLED.to_owned(),
+            ));
+        }
+        // ZMY SELF-ADDED CODE END
         let client = crate::http::shared_startup_blocking_client();
         tracing::info!("Fetching models from {}", self.endpoint.url);
         let mut request = client.get(&self.endpoint.url);
@@ -216,4 +223,27 @@ mod tests {
             .expect("an external provider token authenticates the list fetch");
         assert_eq!("provider-token", bearer);
     }
+
+    // ZMY SELF-ADDED CODE START
+    #[test]
+    fn fork_official_models_endpoint_fails_before_auth_or_request() {
+        let endpoints = EndpointsConfig::from_config_value(
+            &toml::from_str(
+                r#"[endpoints]
+                    models_base_url = "https://api.x.ai/v1""#,
+            )
+            .expect("parse official endpoint"),
+        );
+        let source = OaiModelSource::new(&endpoints, ModelFetchAuth::CustomEndpoint);
+        let error = match source.fetch(None) {
+            Err(error) => error,
+            Ok(_) => panic!("official model services must be disabled"),
+        };
+        assert!(matches!(
+            error,
+            BackendError::Auth(message)
+                if message == xai_grok_env::OFFICIAL_SERVICES_DISABLED
+        ));
+    }
+    // ZMY SELF-ADDED CODE END
 }

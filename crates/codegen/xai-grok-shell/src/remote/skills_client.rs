@@ -417,6 +417,11 @@ impl SkillsClient {
 
     /// Grok.com product Skills require first-party session auth (the same gate as managed MCP and sibling grok.com clients), not plain BYOK API keys.
     async fn require_skills_auth(&self) -> Result<xai_grok_login::GrokAuth, SkillsError> {
+        // ZMY SELF-ADDED CODE START
+        if xai_grok_env::is_official_service_url(&self.base_url) {
+            return Err(SkillsError::NoAuth);
+        }
+        // ZMY SELF-ADDED CODE END
         let auth = self.auth.auth().await.map_err(|_| SkillsError::NoAuth)?;
         if !auth.is_managed_mcp_eligible() {
             return Err(SkillsError::NoAuth);

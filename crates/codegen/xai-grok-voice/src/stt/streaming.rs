@@ -35,6 +35,15 @@ impl StreamingSttSession {
     /// Connect and wait for `transcript.created` before sending audio.
     pub async fn connect(config: &VoiceConfig, bearer: &str) -> Result<Self, VoiceError> {
         let url = build_stt_ws_url(config)?;
+        // ZMY SELF-ADDED CODE START
+        if xai_grok_env::is_official_service_url(url.as_str())
+            || !xai_grok_config::Distribution::current().allows(xai_grok_config::Capability::Voice)
+        {
+            return Err(VoiceError::Config(
+                xai_grok_env::OFFICIAL_SERVICES_DISABLED.to_owned(),
+            ));
+        }
+        // ZMY SELF-ADDED CODE END
         let mut request = url
             .as_str()
             .into_client_request()

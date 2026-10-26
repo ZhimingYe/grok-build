@@ -5,6 +5,12 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum AuthError {
+    // ZMY SELF-ADDED CODE START
+    #[error(
+        "Official Grok/xAI services are disabled in this fork. Configure a third-party or local endpoint."
+    )]
+    OfficialServicesDisabled,
+    // ZMY SELF-ADDED CODE END
     #[error("Not logged in. Run `grok login`.")]
     NotLoggedIn,
 

@@ -8,6 +8,50 @@
 #![deny(clippy::indexing_slicing)]
 mod registry;
 pub use registry::{FIRST_PARTY_CREDENTIAL_ENV_VARS, env_bool, env_string};
+// ZMY SELF-ADDED CODE START
+pub const OFFICIAL_SERVICES_DISABLED: &str = "Official Grok/xAI services are disabled in this fork. Configure a third-party or local endpoint.";
+
+/// Match destinations, not URL substrings: custom hosts and paths stay usable.
+pub fn is_official_service_url(value: &str) -> bool {
+    let Ok(url) = url::Url::parse(value) else {
+        return false;
+    };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    ["grok.com", "x.ai", "xai.com"]
+        .iter()
+        .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
+}
+
+#[cfg(test)]
+mod fork_service_policy_tests {
+    use super::*;
+
+    #[test]
+    fn fork_official_destinations_are_distinct_from_custom_endpoints() {
+        for url in [
+            "https://api.x.ai/v1",
+            "https://AUTH.X.AI./authorize",
+            "wss://code.grok.com/ws/code-agent",
+            "https://grok.com",
+            "https://xai.com/",
+        ] {
+            assert!(is_official_service_url(url), "{url}");
+        }
+        for url in [
+            "http://127.0.0.1:11434/v1",
+            "https://api.deepseek.com/v1",
+            "https://api.x.ai.example.org/v1",
+            "https://api.x.ai@custom.example/v1",
+            "https://custom.example/x.ai/v1",
+        ] {
+            assert!(!is_official_service_url(url), "{url}");
+        }
+    }
+}
+// ZMY SELF-ADDED CODE END
 /// The endpoint set for one backend environment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GrokBuildEndpoints {

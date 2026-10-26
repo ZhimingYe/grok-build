@@ -112,6 +112,9 @@ fn warm_state_machine() {
 #[test]
 fn status_strings_are_stable() {
     for (outcome, status) in [
+        // ZMY SELF-ADDED CODE START
+        (PrewarmOutcome::Disabled, "disabled"),
+        // ZMY SELF-ADDED CODE END
         (PrewarmOutcome::SharingDisabled, "sharing_disabled"),
         (PrewarmOutcome::NoOrigin, "no_origin"),
         (PrewarmOutcome::ClientUnavailable, "client_unavailable"),
@@ -133,6 +136,15 @@ fn status_strings_are_stable() {
         assert_eq!(<&'static str>::from(freshness), status);
     }
 }
+
+// ZMY SELF-ADDED CODE START
+#[tokio::test]
+async fn fork_official_origin_is_not_prewarmed() {
+    let report = super::prewarm_transport("https://api.x.ai/v1").await;
+    assert_eq!(report.outcome, PrewarmOutcome::Disabled);
+    assert_eq!(report.origin, None);
+}
+// ZMY SELF-ADDED CODE END
 
 mod span_capture {
     use std::collections::BTreeMap;

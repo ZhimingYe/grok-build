@@ -398,6 +398,9 @@ async fn run_auth_flow_inner(
     login_override: LoginTransportOverride,
 ) -> anyhow::Result<(GrokAuth, bool)> {
     refuse_withheld_login()?;
+    // ZMY SELF-ADDED CODE START
+    refuse_default_official_login(grok_com_config)?;
+    // ZMY SELF-ADDED CODE END
     let result = ActiveAuthBackend::default()
         .login(LoginRequest {
             auth_manager,
@@ -463,6 +466,11 @@ pub(super) async fn run_auth_flow_steps(
         reauth,
         "auth: starting auth flow"
     );
+    // ZMY SELF-ADDED CODE START
+    if !reauth && let Some(error) = auth_manager.cached_official_auth_error() {
+        return Err(error.into());
+    }
+    // ZMY SELF-ADDED CODE END
     if reauth {
         auth_manager.clear()?;
         let _ = auth_manager.remove_scope(LEGACY_AUTH_SCOPE);
@@ -827,6 +835,9 @@ pub async fn run_cli_login(
     configure_telemetry: impl FnOnce(&AuthManager),
 ) -> anyhow::Result<GrokAuth> {
     refuse_withheld_login()?;
+    // ZMY SELF-ADDED CODE START
+    refuse_default_official_login(&grok_com_config)?;
+    // ZMY SELF-ADDED CODE END
     let _ = devbox;
     let auth_manager = Arc::new(AuthManager::new_with_proxy_base_url(
         &grok_home::grok_home(),
@@ -921,6 +932,24 @@ fn refuse_withheld_login() -> anyhow::Result<()> {
         None => Ok(()),
     }
 }
+
+// ZMY SELF-ADDED CODE START
+fn refuse_default_official_login(config: &GrokComConfig) -> anyhow::Result<()> {
+    let custom_auth = config.auth_provider_command.is_some()
+        || config
+            .oidc
+            .as_ref()
+            .is_some_and(|oidc| !xai_grok_env::is_official_service_url(&oidc.issuer))
+        || config
+            .oauth2
+            .as_ref()
+            .is_some_and(|oauth2| !xai_grok_env::is_official_service_url(&oauth2.issuer));
+    if !custom_auth {
+        anyhow::bail!(xai_grok_env::OFFICIAL_SERVICES_DISABLED);
+    }
+    Ok(())
+}
+// ZMY SELF-ADDED CODE END
 /// Core logout logic shared by the CLI subcommand and the ACP handler.
 /// `None` scope clears the default (same as `/logout`); `Some` removes only that scope entry.
 /// `clear_orphan_managed_config` is injected so this crate stays off the shell's managed config.

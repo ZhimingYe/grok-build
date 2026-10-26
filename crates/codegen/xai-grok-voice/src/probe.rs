@@ -37,6 +37,18 @@ pub struct VoiceProbeReport {
 /// Capture mic audio and stream it to xAI STT, reporting the transcript.
 #[cfg(feature = "audio")]
 pub async fn run_streaming_probe(opts: VoiceProbeOptions) -> Result<VoiceProbeReport, VoiceError> {
+    // ZMY SELF-ADDED CODE START
+    if !xai_grok_config::Distribution::current().allows(xai_grok_config::Capability::Voice)
+        || opts
+            .config
+            .stt_ws_url()
+            .is_ok_and(|url| xai_grok_env::is_official_service_url(&url))
+    {
+        return Err(VoiceError::Config(
+            xai_grok_env::OFFICIAL_SERVICES_DISABLED.to_owned(),
+        ));
+    }
+    // ZMY SELF-ADDED CODE END
     let bearer = crate::auth::require_bearer(&opts.auth).await?;
     let mut stt = StreamingSttSession::connect(&opts.config, &bearer).await?;
     let stt_tx = stt

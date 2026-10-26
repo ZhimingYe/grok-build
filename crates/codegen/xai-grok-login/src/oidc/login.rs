@@ -360,6 +360,11 @@ pub async fn run_login_flow_with_config(
     auth_manager: &Arc<AuthManager>,
     channels: Option<super::super::flow::AuthChannels>,
 ) -> anyhow::Result<(GrokAuth, bool)> {
+    // ZMY SELF-ADDED CODE START
+    if xai_grok_env::is_official_service_url(&oidc.issuer) {
+        anyhow::bail!(xai_grok_env::OFFICIAL_SERVICES_DISABLED);
+    }
+    // ZMY SELF-ADDED CODE END
     tracing::info!(issuer = %oidc.issuer, client_id = %oidc.client_id, "OIDC: starting login flow");
 
     // Ensure jsonwebtoken CryptoProvider is installed (required for JWT validation).

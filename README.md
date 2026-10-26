@@ -1,22 +1,11 @@
-<div align="center">
+<!-- ZMY SELF-ADDED CODE START -->
+# Grok Build (`grok`)
 
-<h1>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://media.x.ai/v1/website/spacexai-symbol-white-transparent-0c31957f.png">
-    <source media="(prefers-color-scheme: light)" srcset="https://media.x.ai/v1/website/spacexai-symbol-black-transparent-6435cf42.png">
-    <img alt="SpaceXAI logo" src="https://media.x.ai/v1/website/spacexai-symbol-black-transparent-6435cf42.png" width="96">
-  </picture>
-  <br>
-  Grok Build (<code>grok</code>)
-</h1>
+This fork provides a terminal-based AI coding agent with a full-screen TUI,
+headless scripting/CI support, and Agent Client Protocol (ACP) integration.
+It supports local models and explicitly configured custom API endpoints.
 
-**Grok Build** is SpaceXAI's terminal-based AI coding agent. It runs as a
-full-screen TUI that understands your codebase, edits files, executes shell
-commands, searches the web, and manages long-running tasks — interactively,
-headlessly for scripting/CI, or embedded in editors via the Agent Client
-Protocol (ACP).
-
-[Installing the released binary](#installing-the-released-binary) ·
+[Installing a fork release](#installing-a-fork-release) ·
 [Building from source](#building-from-source) ·
 [Documentation](#documentation) ·
 [Repository layout](#repository-layout) ·
@@ -24,32 +13,18 @@ Protocol (ACP).
 [Contributing](#contributing) ·
 [License](#license)
 
-![Grok Build TUI](https://media.x.ai/v1/website/universe-tui-screenshot-6f7a0837.png)
-
-**Learn more about Grok Build at [x.ai/cli](https://x.ai/cli)**
-
-This repository contains the Rust source for the `grok` CLI/TUI and its agent
-runtime. It is synced periodically from the SpaceXAI monorepo.
-
-A small `SOURCE_REV` file at the root records the full monorepo commit SHA
-for the version of the code present in this tree.
-
-</div>
+<!-- Removed upstream logo, screenshot, and x.ai promotional links to avoid built-in vendor associations. -->
+<!-- ZMY SELF-ADDED CODE END -->
 
 ---
 
-## Installing the released binary
+<!-- ZMY SELF-ADDED CODE START -->
+## Installing a fork release
 
-Prebuilt binaries are published for macOS, Linux, and Windows:
-
-```sh
-curl -fsSL https://x.ai/cli/install.sh | bash   # macOS / Linux / Git Bash
-irm https://x.ai/cli/install.ps1 | iex          # Windows PowerShell
-grok --version
-```
-
-See the [changelog](https://x.ai/build/changelog) for the latest fixes,
-features, and improvements in each release.
+Download a prebuilt binary, when available, from the
+[ZhimingYe/grok-build Releases](https://github.com/ZhimingYe/grok-build/releases)
+page. No upstream installer or mandatory account sign-in is used.
+<!-- ZMY SELF-ADDED CODE END -->
 
 ## Building from source
 
@@ -78,14 +53,16 @@ cargo build -p xai-grok-pager-bin --release  # release binary: target/release/xa
 cargo check -p xai-grok-pager-bin            # fast validation
 ```
 
-The binary artifact is named `xai-grok-pager`; official installs ship it as
-`grok`. On first launch it opens your browser to authenticate — see the
-[authentication guide](crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md).
+<!-- ZMY SELF-ADDED CODE START -->
+The binary artifact is named `xai-grok-pager`; packaged fork releases name it
+`grok`. Configure a local model or a custom API endpoint and credentials as
+described in the local [authentication guide](crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md).
+<!-- ZMY SELF-ADDED CODE END -->
 
+<!-- ZMY SELF-ADDED CODE START -->
+<!-- Removed upstream online documentation links; local guides remain available. -->
+<!-- ZMY SELF-ADDED CODE END -->
 ## Documentation
-
-Full online documentation is available at
-[docs.x.ai/build/overview](https://docs.x.ai/build/overview).
 
 The user guide ships with the pager crate:
 [`crates/codegen/xai-grok-pager/docs/user-guide/`](crates/codegen/xai-grok-pager/docs/user-guide/)
