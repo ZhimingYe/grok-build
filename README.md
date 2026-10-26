@@ -1,117 +1,118 @@
 <!-- ZMY SELF-ADDED CODE START -->
-# Grok Build (`grok`)
+# lightbuild
 
-This fork provides a terminal-based AI coding agent with a full-screen TUI,
-headless scripting/CI support, and Agent Client Protocol (ACP) integration.
-It supports local models and explicitly configured custom API endpoints.
+lightbuild 是基于 **Grok Build** 的独立 fork，遵循 **Apache License, Version 2.0**，为终端开发工作流提供 AI 编程助手。
 
-[Installing a fork release](#installing-a-fork-release) ·
-[Building from source](#building-from-source) ·
-[Documentation](#documentation) ·
-[Repository layout](#repository-layout) ·
-[Development](#development) ·
-[Contributing](#contributing) ·
-[License](#license)
+项目保留全屏终端界面（TUI）、非交互式运行和 Agent Client Protocol（ACP）集成，支持连接本地模型或自行配置的模型 API 服务。lightbuild 并非 SpaceXAI 官方产品；上游代码的版权与第三方许可声明予以保留。
 
-<!-- Removed upstream logo, screenshot, and x.ai promotional links to avoid built-in vendor associations. -->
-<!-- ZMY SELF-ADDED CODE END -->
+<!-- 删除上游品牌图片、截图与推广入口；本 README 使用纯文本介绍 lightbuild。 -->
 
----
+## 功能
 
-<!-- ZMY SELF-ADDED CODE START -->
-## Installing a fork release
+- **终端交互**：全屏 TUI、键盘快捷键、会话管理与主题配置。
+- **编程工具**：读取和编辑文件、搜索代码、执行终端命令。
+- **模型接入**：支持 OpenAI Chat Completions、OpenAI Responses 和 Anthropic Messages 协议，以及兼容这些协议的本地服务。
+- **自动化**：通过 headless 模式在脚本中运行任务，或通过 ACP 与客户端集成。
+- **扩展与权限**：支持 MCP、skills、plugins、hooks，以及工具权限和沙箱配置。
 
-Download a prebuilt binary, when available, from the
-[ZhimingYe/grok-build Releases](https://github.com/ZhimingYe/grok-build/releases)
-page. No upstream installer or mandatory account sign-in is used.
-<!-- ZMY SELF-ADDED CODE END -->
+## 获取与构建
 
-## Building from source
+发布产物（如有）见 [lightbuild Releases](https://github.com/ZhimingYe/lightbuild/releases)。也可以直接从源码构建。
 
-Requirements:
+### 环境要求
 
-- **Rust** — the toolchain is pinned by [`rust-toolchain.toml`](rust-toolchain.toml);
-  `rustup` installs it automatically on first build.
-- **[DotSlash](https://dotslash-cli.com)** — required so hermetic tools under
-  [`bin/`](bin/) (notably [`bin/protoc`](bin/protoc)) can download and run.
-  Install it and ensure `dotslash` is on your `PATH` **before** building:
+- **Rust**：使用 [`rust-toolchain.toml`](rust-toolchain.toml) 固定的工具链，`rustup` 会在构建时按需安装。
+- **DotSlash**：[`bin/`](bin/) 下的工具包装器（包括 `protoc`）需要它下载并运行对应工具。构建前确保 `dotslash` 位于 `PATH` 中。
+- **Protocol Buffers 编译器**：默认通过 [`bin/protoc`](bin/protoc) 调用，也可通过 `PROTOC` 或 `PATH` 提供 `protoc`。
 
-  ```sh
-  cargo install dotslash
-  # or: prebuilt packages — https://dotslash-cli.com/docs/installation/
-  /usr/bin/env dotslash --help   # sanity check
-  ```
-
-- **protoc** — proto codegen resolves [`bin/protoc`](bin/protoc) via DotSlash,
-  or falls back to a `protoc` on `PATH` / `$PROTOC`.
-- macOS and Linux are supported build hosts; Windows builds are best-effort
-  and not currently tested from this tree.
+主要构建环境为 Linux 和 macOS；Windows 构建尚未在本仓库验证。
 
 ```sh
-cargo run -p xai-grok-pager-bin              # build + launch the TUI
-cargo build -p xai-grok-pager-bin --release  # release binary: target/release/xai-grok-pager
-cargo check -p xai-grok-pager-bin            # fast validation
+git clone https://github.com/ZhimingYe/lightbuild.git
+cd lightbuild
+
+cargo install dotslash
+dotslash --help
+
+# 构建并启动终端界面
+cargo run -p xai-grok-pager-bin
+
+# 构建 release 二进制
+cargo build -p xai-grok-pager-bin --release
 ```
 
-<!-- ZMY SELF-ADDED CODE START -->
-The binary artifact is named `xai-grok-pager`; packaged fork releases name it
-`grok`. Configure a local model or a custom API endpoint and credentials as
-described in the local [authentication guide](crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md).
-<!-- ZMY SELF-ADDED CODE END -->
+构建产物为 `target/release/xai-grok-pager`。项目名为 **lightbuild**，但源码中的 crate 名称、二进制名称和配置路径仍沿用上游命名；本文不会假定系统中已有名为 `lightbuild` 的命令。
 
-<!-- ZMY SELF-ADDED CODE START -->
-<!-- Removed upstream online documentation links; local guides remain available. -->
-<!-- ZMY SELF-ADDED CODE END -->
-## Documentation
+## 配置模型
 
-The user guide ships with the pager crate:
-[`crates/codegen/xai-grok-pager/docs/user-guide/`](crates/codegen/xai-grok-pager/docs/user-guide/)
-— getting started, keyboard shortcuts, slash commands, configuration, theming,
-MCP servers, skills, plugins, hooks, headless mode, sandboxing, and more.
+无需强制登录 Grok 账户即可进入界面，但运行模型任务前仍需配置可用的模型服务，以及该服务要求的凭据。
 
-## Repository layout
+在 `~/.grok/config.toml` 中配置自定义模型，例如：
 
-| Path | Contents |
-|------|----------|
-| `crates/codegen/xai-grok-pager-bin` | Composition-root package; builds the `xai-grok-pager` binary |
-| `crates/codegen/xai-grok-pager` | The TUI: scrollback, prompt, modals, rendering |
-| `crates/codegen/xai-grok-shell` | Agent runtime + leader/stdio/headless entry points |
-| `crates/codegen/xai-grok-tools` | Tool implementations (terminal, file edit, search, ...) |
-| `crates/codegen/xai-grok-workspace` | Host filesystem, VCS, execution, checkpoints |
-| `crates/codegen/...` | The rest of the CLI crate closure (config, MCP, markdown, sandbox, ...) |
-| `crates/common/`, `crates/build/`, `prod/mc/` | Small shared leaf crates pulled in by the closure |
-| `third_party/` | Vendored upstream source (Mermaid diagram stack) — see below |
+```toml
+[models]
+default = "my-model"
 
-> [!IMPORTANT]
-> The root `Cargo.toml` (workspace members, dependency versions, lints,
-> profiles) is **generated** — treat it as read-only. Prefer editing per-crate
-> `Cargo.toml` files.
+[model.my-model]
+name = "My Model"
+model = "your-model-id"
+base_url = "https://api.example.com/v1"
+api_backend = "chat_completions"
+env_key = "MODEL_API_KEY"
+```
 
-## Development
+将 `model` 和 `base_url` 替换为实际模型标识与服务地址，并在当前环境中设置 `MODEL_API_KEY`。不要把真实密钥提交到仓库。连接本地服务时，请使用该服务实际支持的协议与认证配置。
+
+更多参数见[自定义模型指南](crates/codegen/xai-grok-pager/docs/user-guide/11-custom-models.md)。
+
+## 使用
+
+以下示例从仓库根目录运行，使用前面的 release 构建产物：
 
 ```sh
-cargo check -p <crate>        # always target specific crates; full-workspace builds are slow
-cargo test -p xai-grok-config # per-crate tests
-cargo clippy -p <crate>       # lint config: clippy.toml at the repo root
-cargo fmt --all               # rustfmt.toml at the repo root
+# 交互式终端界面
+./target/release/xai-grok-pager -m my-model
+
+# 非交互式任务
+./target/release/xai-grok-pager -m my-model -p "解释这个项目的目录结构"
+
+# 查看命令行参数
+./target/release/xai-grok-pager --help
 ```
 
-## Contributing
+Agent 可调用文件和终端工具。请在可信工作目录中使用，并按需要设置[权限与安全策略](crates/codegen/xai-grok-pager/docs/user-guide/22-permissions-and-safety.md)。
 
-> [!NOTE]
-> External contributions are not accepted. See [`CONTRIBUTING.md`](CONTRIBUTING.md).
+## 文档
 
-## License
+完整指南位于 [`docs/user-guide/`](crates/codegen/xai-grok-pager/docs/user-guide/)，常用入口：
 
-First-party code in this repository is licensed under the **Apache License,
-Version 2.0** — see [`LICENSE`](LICENSE).
+- [快捷键](crates/codegen/xai-grok-pager/docs/user-guide/03-keyboard-shortcuts.md)与[斜杠命令](crates/codegen/xai-grok-pager/docs/user-guide/04-slash-commands.md)
+- [配置](crates/codegen/xai-grok-pager/docs/user-guide/05-configuration.md)与[自定义模型](crates/codegen/xai-grok-pager/docs/user-guide/11-custom-models.md)
+- [MCP 服务](crates/codegen/xai-grok-pager/docs/user-guide/07-mcp-servers.md)、[Skills](crates/codegen/xai-grok-pager/docs/user-guide/08-skills.md)与[Plugins](crates/codegen/xai-grok-pager/docs/user-guide/09-plugins.md)
+- [Headless 模式](crates/codegen/xai-grok-pager/docs/user-guide/14-headless-mode.md)与[沙箱](crates/codegen/xai-grok-pager/docs/user-guide/18-sandbox.md)
 
-Third-party and vendored code remains under its original licenses. See:
+部分指南继承自上游，仍使用 `grok` 命令及 Grok 品牌名称；其中涉及上游登录、托管服务或安装渠道的说明，不代表 lightbuild 提供或要求使用这些服务。
 
-- [`THIRD-PARTY-NOTICES`](THIRD-PARTY-NOTICES) — crates.io / git dependencies,
-  bundled UI themes, and **in-tree source ports** (including openai/codex and
-  sst/opencode tool implementations)
-- [`crates/codegen/xai-grok-tools/THIRD_PARTY_NOTICES.md`](crates/codegen/xai-grok-tools/THIRD_PARTY_NOTICES.md)
-  — crate-local notice for the codex and opencode ports (license texts +
-  Apache §4(b) change notice)
-- [`third_party/NOTICE`](third_party/NOTICE) — vendored Mermaid-stack index
+## 开发
+
+主要代码位于 `crates/codegen/`：`xai-grok-pager-bin` 是二进制入口，`xai-grok-pager` 提供 TUI，`xai-grok-shell` 提供 Agent 运行时，`xai-grok-tools` 实现工具，`xai-grok-workspace` 处理工作区操作。
+
+```sh
+cargo check -p xai-grok-pager-bin
+cargo test -p xai-grok-config
+cargo clippy -p xai-grok-pager-bin
+cargo fmt --all
+```
+
+请按需针对单个 crate 运行检查，避免不必要的全工作区构建。根目录的 `Cargo.toml` 是生成文件，依赖调整优先在各 crate 的清单中进行。fork 自定义修改须遵循 [`AGENTS.md`](AGENTS.md) 的成对注释标记约定。
+
+## 来源与许可证
+
+lightbuild fork 自 Grok Build，基于 **Apache License, Version 2.0** 继续开发与分发。上游版权声明为 **Copyright 2023–2026 SpaceXAI**；完整许可条款见 [`LICENSE`](LICENSE)。本项目的名称与维护不代表上游官方背书。
+
+第三方依赖和 vendored 代码保留各自的许可证及归属声明，详见：
+
+- [`THIRD-PARTY-NOTICES`](THIRD-PARTY-NOTICES)：依赖、主题及源码移植的声明。
+- [`crates/codegen/xai-grok-tools/THIRD_PARTY_NOTICES.md`](crates/codegen/xai-grok-tools/THIRD_PARTY_NOTICES.md)：工具层移植代码的许可与修改声明。
+- [`third_party/NOTICE`](third_party/NOTICE)：vendored Mermaid 相关组件的声明索引。
+<!-- ZMY SELF-ADDED CODE END -->
