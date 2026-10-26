@@ -1453,6 +1453,18 @@ impl MvpAgent {
             xai_chat_state::AuthType::ApiKey
         }
     }
+    // ZMY SELF-ADDED CODE START
+    fn optional_account_login_allowed(&self) -> bool {
+        let cfg = self.cfg.borrow();
+        let grok_com_config = &cfg.grok_com_config;
+        auth_method::optional_account_login_allowed(
+            grok_com_config.preferred_method,
+            grok_com_config.oidc.is_some(),
+            grok_com_config.auth_provider_command.is_some(),
+            grok_com_config.api_key_auth_disabled(),
+        )
+    }
+    // ZMY SELF-ADDED CODE END
     /// Fall through to `xai.api_key` if the startup probe still allows it, else `grok.com`.
     /// `None` when `preferred_method` is pinned.
     pub(super) fn cached_token_fallthrough_method_id(
@@ -1495,6 +1507,14 @@ impl MvpAgent {
             );
             return Err(acp::Error::auth_required().data(msg));
         };
+        // ZMY SELF-ADDED CODE START
+        if method_id.0.as_ref() == auth_method::GROK_COM_METHOD_ID
+            && self.optional_account_login_allowed()
+        {
+            return Err(acp::Error::auth_required()
+                .data(auth_method::OPTIONAL_ACCOUNT_LOGIN_REQUIRED_MESSAGE));
+        }
+        // ZMY SELF-ADDED CODE END
         let meta = if method_id.0.as_ref() == auth_method::GROK_COM_METHOD_ID {
             serde_json::json!({ "use_oauth": true }).as_object().cloned()
         } else {
@@ -4412,9 +4432,11 @@ impl MvpAgent {
         let origin_client = self.origin_client_info_from_meta(init.meta.as_ref());
         let sampling_config = self
             .resolve_sampling_config_for_model(&session_model_id, origin_client.clone());
-        if self.auth_method_id.load().is_none() {
+        // ZMY SELF-ADDED CODE START
+        if self.auth_method_id.load().is_none() && !self.optional_account_login_allowed() {
             return Err(acp::Error::auth_required().data("no auth method id provided"));
         }
+        // ZMY SELF-ADDED CODE END
         let auth_method_id = std::sync::Arc::clone(&self.auth_method_id);
         tracing::info!(
             session_id = %session_info.id.0,

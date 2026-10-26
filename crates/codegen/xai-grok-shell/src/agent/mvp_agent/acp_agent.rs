@@ -471,6 +471,9 @@ impl acp::Agent for MvpAgent {
                 enterprise_oidc_issuer: enterprise_oidc_issuer.as_deref(),
                 login_label: login_label.as_deref(),
                 has_auth_provider_command: has_auth_provider,
+                // ZMY SELF-ADDED CODE START
+                disable_api_key_auth,
+                // ZMY SELF-ADDED CODE END
                 preferred_method,
             })
         };

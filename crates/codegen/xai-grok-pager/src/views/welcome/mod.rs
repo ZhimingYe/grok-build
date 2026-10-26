@@ -3520,7 +3520,10 @@ mod tests {
         assert_eq!(layout.logo.width, 0);
         assert_eq!(layout.menu.width, 0);
         // Sub-rects inside the hero box are valid.
-        assert!(layout.hero_logo.height > 0);
+        // ZMY SELF-ADDED CODE START
+        // The hero logo rectangle is empty when homepage branding is disabled.
+        assert_eq!(layout.hero_logo.height, 0);
+        // ZMY SELF-ADDED CODE END
         assert!(layout.hero_menu.height > 0);
         assert_eq!(layout.hero_version.height, 1);
     }
@@ -3606,14 +3609,16 @@ mod tests {
         assert_eq!(max, 13);
         let tall = WelcomeLayout::compute(input(Some(max)));
         assert!(!tall.has_hero_box());
-        // Compact logo 5 + gap 1 + menu 4 + flex 1 + prompt 13 + version 2 = 26 fits exactly
-        assert_eq!(tall.logo_tier, LogoTier::Compact);
+        // ZMY SELF-ADDED CODE START
+        // The stacked fallback retains the hidden logo tier and reclaims its rows.
+        assert_eq!(tall.logo_tier, LogoTier::Hidden);
+        // ZMY SELF-ADDED CODE END
         assert_places_every_row(&tall, &input(Some(max)));
     }
 
-    /// iTerm2's default 80x25 (content 22): the compact logo stays while the column fits and steps down only when it does not.
+    // ZMY SELF-ADDED CODE START
     #[test]
-    fn stacked_logo_keeps_its_tier_until_the_column_overflows() {
+    fn stacked_homepage_logo_stays_hidden_as_draft_grows() {
         let area = Rect::new(0, 0, 80, 22);
         let input = |prompt_height| WelcomeLayoutInput {
             content_area: area,
@@ -3622,40 +3627,23 @@ mod tests {
             ..Default::default()
         };
         let one_line = WelcomeLayout::compute(input(None));
-        assert_eq!(one_line.logo_tier, LogoTier::Compact);
-        // Compact logo 5 + gap 1 + menu 4 + flex 1 + prompt + version 2 = 13 + prompt: fits up to a 9-row draft
-        // The one-line layout has a 5-row flex gap, so the first 4 extra rows move nothing; the next two shift the column up
-        for extra in 1..=6u16 {
-            let layout = WelcomeLayout::compute(input(Some(PROMPT_HEIGHT + extra)));
-            assert_eq!(layout.logo_tier, LogoTier::Compact, "{extra} extra rows");
-            if extra <= 4 {
-                assert_eq!(
-                    layout.logo, one_line.logo,
-                    "{extra} extra rows: the logo holds still"
-                );
-                assert_eq!(
-                    layout.menu.y, one_line.menu.y,
-                    "{extra} extra rows: the menu holds still"
-                );
-            } else {
-                assert_eq!(
-                    layout.logo.y,
-                    one_line.logo.y - (extra - 4),
-                    "{extra} extra rows"
-                );
-            }
-            assert_places_every_row(&layout, &input(Some(PROMPT_HEIGHT + extra)));
-        }
-        let max = prompt_max_height(&input(None));
-        assert_eq!(max, 11);
-        let tall = WelcomeLayout::compute(input(Some(max)));
-        assert_eq!(tall.logo_tier, LogoTier::Hidden);
-        assert_places_every_row(&tall, &input(Some(max)));
-    }
+        assert_eq!(one_line.logo_tier, LogoTier::Hidden);
+        assert_eq!(one_line.logo.height, 0);
+        assert_places_every_row(&one_line, &input(None));
 
-    /// 80x33: the full logo fits beside every draft up to the cap, so it never steps down.
+        let max = prompt_max_height(&input(None));
+        for prompt_height in PROMPT_HEIGHT..=max {
+            let layout = WelcomeLayout::compute(input(Some(prompt_height)));
+            assert_eq!(layout.logo_tier, LogoTier::Hidden, "prompt {prompt_height}");
+            assert_eq!(layout.logo.height, 0, "prompt {prompt_height}");
+            assert_places_every_row(&layout, &input(Some(prompt_height)));
+        }
+    }
+    // ZMY SELF-ADDED CODE END
+
+    // ZMY SELF-ADDED CODE START
     #[test]
-    fn stacked_full_logo_survives_the_whole_draft_range_when_it_fits() {
+    fn stacked_homepage_logo_is_hidden_for_every_draft_height() {
         let area = Rect::new(0, 0, 80, 33);
         let input = |prompt_height| WelcomeLayoutInput {
             content_area: area,
@@ -3666,10 +3654,12 @@ mod tests {
         let max = prompt_max_height(&input(PROMPT_HEIGHT));
         for prompt_height in PROMPT_HEIGHT..=max {
             let layout = WelcomeLayout::compute(input(prompt_height));
-            assert_eq!(layout.logo_tier, LogoTier::Full, "prompt {prompt_height}");
+            assert_eq!(layout.logo_tier, LogoTier::Hidden, "prompt {prompt_height}");
+            assert_eq!(layout.logo.height, 0, "prompt {prompt_height}");
             assert_places_every_row(&layout, &input(prompt_height));
         }
     }
+    // ZMY SELF-ADDED CODE END
 
     /// The cap must leave room for every other stacked row: default tip, privacy banner (2), a startup warning, the import menu row.
     /// Where even the one-line box is squeezed on main (under ~14 rows), the cap must simply refuse to grow.
@@ -3710,10 +3700,9 @@ mod tests {
         }
     }
 
-    /// A draft that no longer fits beside the full logo steps the reserved rows AND the painted art down together.
+    // ZMY SELF-ADDED CODE START
     #[test]
-    fn stacked_logo_art_matches_the_rows_reserved_for_a_tall_draft() {
-        // Full logo 7 + gap 1 + menu 4 + flex 1 + prompt + version 2 = 15 + prompt: 26 rows fit an 11-row draft under the full logo; 13 rows need the compact one
+    fn stacked_logo_art_is_not_reserved_for_a_tall_draft() {
         let area = Rect::new(0, 0, 60, 26);
         let input = |prompt_height| WelcomeLayoutInput {
             content_area: area,
@@ -3722,15 +3711,15 @@ mod tests {
             ..Default::default()
         };
         let one_line = WelcomeLayout::compute(input(None));
-        assert_eq!(one_line.logo_tier, LogoTier::Full);
-        assert_eq!(one_line.logo.height, logo::full_logo_line_count());
+        assert_eq!(one_line.logo_tier, LogoTier::Hidden);
+        assert_eq!(one_line.logo.height, 0);
 
         let tall = WelcomeLayout::compute(input(Some(13)));
-        assert_eq!(tall.logo_tier, LogoTier::Compact);
-        assert_eq!(tall.logo.height, logo::compact_logo_line_count());
-        assert_eq!(tall.logo.height, tall.logo_tier.rows());
+        assert_eq!(tall.logo_tier, LogoTier::Hidden);
+        assert_eq!(tall.logo.height, 0);
         assert_places_every_row(&tall, &input(Some(13)));
     }
+    // ZMY SELF-ADDED CODE END
 
     #[test]
     fn prompt_max_height_is_half_the_area_unless_the_column_needs_the_rows() {
@@ -3749,11 +3738,9 @@ mod tests {
         assert_eq!(cap(18, 0), 9);
     }
 
-    /// The consent screen passes 0 prompt rows and must sit exactly where it did before the composer could grow.
+    // ZMY SELF-ADDED CODE START
     #[test]
-    fn zero_row_prompt_is_not_charged_for_a_one_line_box_when_centering() {
-        // 80x28, a 9-row body, a 2-row menu: full logo 7 + gap 1 + gap 1 + body 9 leaves 10 rows
-        // (10 - 4 - 2) / 3 = 1 with the zero-row box; a phantom 3-row box would give (10 - 4 - 5) / 3 = 0
+    fn zero_row_prompt_keeps_the_homepage_logo_unallocated() {
         let area = Rect::new(0, 0, 80, 28);
         let layout = WelcomeLayout::compute_stacked(WelcomeLayoutInput {
             content_area: area,
@@ -3762,10 +3749,11 @@ mod tests {
             prompt_height: Some(0),
             ..Default::default()
         });
-        assert_eq!(layout.logo_tier, LogoTier::Full);
-        assert_eq!(layout.logo.y, 1);
+        assert_eq!(layout.logo_tier, LogoTier::Hidden);
+        assert_eq!(layout.logo.height, 0);
         assert_eq!(layout.prompt.height, 0);
     }
+    // ZMY SELF-ADDED CODE END
 
     /// End to end: the draft measured in `render_welcome` is what sizes the box, not a hand-fed `prompt_height`.
     #[test]
@@ -3926,11 +3914,9 @@ mod tests {
         );
     }
 
+    // ZMY SELF-ADDED CODE START
     #[test]
-    fn hero_box_inactive_when_warning_would_overflow() {
-        // Regression: the box is forced to the full 7-row logo, so even a 3-item menu needs 11 box rows
-        // A startup warning (error_height = 2) pushes the total past height 19
-        // The gate must therefore fall back to the stacked layout instead of overflowing by a row
+    fn hero_box_stays_active_when_warning_fits_without_logo() {
         let area = Rect::new(0, 0, 90, 19);
         let with_warning = WelcomeLayout::compute(WelcomeLayoutInput {
             content_area: area,
@@ -3938,7 +3924,9 @@ mod tests {
             menu_height: 3,
             ..Default::default()
         });
-        assert!(!with_warning.has_hero_box());
+        assert!(with_warning.has_hero_box());
+        assert_eq!(with_warning.error.height, 2);
+        assert!(with_warning.hero_box.bottom() <= area.bottom());
         // The same terminal fits the box once the warning is gone.
         let no_warning = WelcomeLayout::compute(WelcomeLayoutInput {
             content_area: area,
@@ -3947,6 +3935,7 @@ mod tests {
         });
         assert!(no_warning.has_hero_box());
     }
+    // ZMY SELF-ADDED CODE END
 
     #[test]
     fn blocked_layout_stays_stacked_on_wide_terminal() {
@@ -3969,10 +3958,10 @@ mod tests {
             ..Default::default()
         });
         assert!(!blocked.has_hero_box());
-        assert!(
-            blocked.logo.height > 0,
-            "logo must be painted on the login screen"
-        );
+        // ZMY SELF-ADDED CODE START
+        // Blocked screens keep the stacked layout, but do not reserve or paint homepage branding.
+        assert_eq!(blocked.logo.height, 0);
+        // ZMY SELF-ADDED CODE END
         assert!(
             blocked.menu.height > 0,
             "menu must be painted on the login screen"
@@ -4010,9 +3999,10 @@ mod tests {
 
     #[test]
     fn hero_box_height_accounts_for_borders_and_padding() {
-        // At h >= 26, logo07 is used (7 lines). With menu_height=3:
-        // right_col = 2 + 0 + 0 + 1 + 3 = 6, inner = max(7, 6) = 7.
-        // hero_box_height = 2 (borders) + 2 (v_pad) + 7 = 11.
+        // ZMY SELF-ADDED CODE START
+        // The 3-row menu determines the 6-row inner box when the logo is hidden.
+        // hero_box_height = 2 (borders) + 2 (v_pad) + 6 = 10.
+        // ZMY SELF-ADDED CODE END
         let area = Rect::new(0, 0, 100, 50);
         let layout = WelcomeLayout::compute(WelcomeLayoutInput {
             content_area: area,
@@ -4020,7 +4010,9 @@ mod tests {
             ..Default::default()
         });
         assert!(layout.has_hero_box());
-        assert_eq!(layout.hero_box.height, 11);
+        // ZMY SELF-ADDED CODE START
+        assert_eq!(layout.hero_box.height, 10);
+        // ZMY SELF-ADDED CODE END
     }
 
     #[test]
@@ -4460,9 +4452,9 @@ the usual channels. "
         assert!(saw_stacked, "the cap must push the box out at 100x32");
     }
 
-    /// The stacked announcement outranks the logo and the draft: the cap reserves its rows, and the logo steps down before it would yield.
+    // ZMY SELF-ADDED CODE START
     #[test]
-    fn stacked_announcement_stays_visible_for_every_draft_height() {
+    fn stacked_announcement_stays_visible_while_homepage_logo_is_hidden() {
         let area = Rect::new(0, 0, 70, 30);
         let ann = long_ann();
         let input = |prompt_height| WelcomeLayoutInput {
@@ -4476,23 +4468,20 @@ the usual channels. "
         assert!(!one_line.has_hero_box());
         let slot = one_line.changelog.height;
         assert!(slot > 0);
-        assert_eq!(one_line.logo_tier, LogoTier::Full);
+        assert_eq!(one_line.logo_tier, LogoTier::Hidden);
         let max = prompt_max_height(&input(None));
-        let mut saw_logo_yield = false;
         for prompt_height in PROMPT_HEIGHT..=max {
             let layout = WelcomeLayout::compute(input(Some(prompt_height)));
             assert_eq!(
                 layout.changelog.height, slot,
                 "prompt {prompt_height}: the announcement must keep its rows"
             );
-            saw_logo_yield |= layout.logo_tier != LogoTier::Full;
+            assert_eq!(layout.logo_tier, LogoTier::Hidden, "prompt {prompt_height}");
+            assert_eq!(layout.logo.height, 0, "prompt {prompt_height}");
             assert_places_every_row(&layout, &input(Some(prompt_height)));
         }
-        assert!(
-            saw_logo_yield,
-            "the cap must be high enough to push the logo out at 70x30"
-        );
     }
+    // ZMY SELF-ADDED CODE END
 
     /// Production hides the logo on a short terminal and keeps the announcement; a one-line draft must still do that.
     #[test]

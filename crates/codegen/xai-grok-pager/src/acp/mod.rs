@@ -554,6 +554,17 @@ pub fn parse_feedback_trace_offer(meta: Option<&acp::Meta>) -> bool {
         .and_then(|v| v.as_bool())
         .unwrap_or(false)
 }
+// ZMY SELF-ADDED CODE START
+fn is_optional_account_login(method: &acp::AuthMethod) -> bool {
+    AuthMethodKind::from_id(method.id()) == AuthMethodKind::GrokCom
+        && method
+            .meta()
+            .as_ref()
+            .and_then(|meta| meta.get("optional_login"))
+            .and_then(|value| value.as_bool())
+            == Some(true)
+}
+// ZMY SELF-ADDED CODE END
 /// Determine whether interactive login is needed based on the advertised auth methods. Otherwise, authenticate
 /// eagerly.
 pub fn startup_auth_metadata(
@@ -565,9 +576,14 @@ pub fn startup_auth_metadata(
     AuthStartMode,
 ) {
     let first_method = auth_methods.first();
+    // ZMY SELF-ADDED CODE START
     let needs_login = first_method
-        .map(|m| AuthMethodKind::from_id(m.id()).needs_interactive_login())
+        .map(|m| {
+            AuthMethodKind::from_id(m.id()).needs_interactive_login()
+                && !is_optional_account_login(m)
+        })
         .unwrap_or(false);
+    // ZMY SELF-ADDED CODE END
     if !needs_login {
         return (false, None, None, AuthStartMode::Pending);
     }
@@ -639,6 +655,15 @@ async fn eager_auth_or_login_fallback(
     if auth_methods.is_empty() {
         return (true, None, None, AuthStartMode::Pending, None);
     }
+    // ZMY SELF-ADDED CODE START
+    // Skipping the login screen alone would still start OAuth through eager authenticate.
+    if select_eager_auth_method(auth_methods, default_auth_method_id)
+        .and_then(|id| auth_methods.iter().find(|method| method.id() == &id))
+        .is_some_and(is_optional_account_login)
+    {
+        return (false, None, None, AuthStartMode::Pending, None);
+    }
+    // ZMY SELF-ADDED CODE END
     if needs_login {
         return (
             needs_login,
@@ -664,6 +689,15 @@ async fn eager_auth_or_login_fallback(
                 return (false, login_label, login_method_id, auth_start_mode, None);
             }
             let (label, method_id, mode) = find_interactive_login_method(auth_methods);
+            // ZMY SELF-ADDED CODE START
+            if method_id.as_ref().is_some_and(|id| {
+                auth_methods
+                    .iter()
+                    .any(|method| method.id() == id && is_optional_account_login(method))
+            }) {
+                return (false, None, None, AuthStartMode::Pending, None);
+            }
+            // ZMY SELF-ADDED CODE END
             (true, label, method_id, mode, None)
         }
     }
@@ -755,6 +789,82 @@ pub fn select_eager_auth_method(
 #[cfg(test)]
 mod tests {
     use super::*;
+    // ZMY SELF-ADDED CODE START
+    fn fresh_fork_auth_inputs()
+    -> xai_grok_shell::agent::auth_method::AuthMethodsBuildInputs<'static> {
+        xai_grok_shell::agent::auth_method::AuthMethodsBuildInputs {
+            has_external_api_key: false,
+            has_cached_token: false,
+            has_enterprise_oidc: false,
+            enterprise_oidc_issuer: None,
+            login_label: None,
+            has_auth_provider_command: false,
+            disable_api_key_auth: false,
+            preferred_method: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn fork_fresh_start_skips_login_and_sends_no_auth_request() {
+        let built =
+            xai_grok_shell::agent::auth_method::build_auth_methods(fresh_fork_auth_inputs());
+        let (needs, label, method, mode) = startup_auth_metadata(&built.methods);
+        assert!(!needs);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            eager_auth_or_login_fallback(
+                &tx,
+                &built.methods,
+                built.default_auth_method_id.as_ref(),
+                needs,
+                label,
+                method,
+                mode,
+            ),
+        )
+        .await
+        .expect("fresh startup must not wait for authentication");
+        assert!(!result.0);
+        assert!(result.4.is_none());
+        assert!(matches!(
+            rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+        // Manual login remains available; only automatic startup login is optional.
+        assert_eq!(
+            find_interactive_login_method(&built.methods)
+                .1
+                .unwrap()
+                .0
+                .as_ref(),
+            "grok.com"
+        );
+    }
+
+    #[test]
+    fn fork_explicit_provider_and_oidc_pin_still_require_login() {
+        for inputs in [
+            xai_grok_shell::agent::auth_method::AuthMethodsBuildInputs {
+                has_auth_provider_command: true,
+                ..fresh_fork_auth_inputs()
+            },
+            xai_grok_shell::agent::auth_method::AuthMethodsBuildInputs {
+                has_enterprise_oidc: true,
+                enterprise_oidc_issuer: Some("https://sso.example.com"),
+                ..fresh_fork_auth_inputs()
+            },
+            xai_grok_shell::agent::auth_method::AuthMethodsBuildInputs {
+                preferred_method: Some(xai_grok_login::PreferredAuthMethod::Oidc),
+                ..fresh_fork_auth_inputs()
+            },
+        ] {
+            let built = xai_grok_shell::agent::auth_method::build_auth_methods(inputs);
+            assert!(startup_auth_metadata(&built.methods).0);
+            assert!(!is_optional_account_login(&built.methods[0]));
+        }
+    }
+    // ZMY SELF-ADDED CODE END
     #[test]
     fn is_session_update_ext_method_covers_both_carriers() {
         assert!(is_session_update_ext_method("x.ai/session_notification"));
@@ -883,6 +993,9 @@ mod tests {
             enterprise_oidc_issuer: None,
             login_label: None,
             has_auth_provider_command: false,
+            // ZMY SELF-ADDED CODE START
+            disable_api_key_auth: false,
+            // ZMY SELF-ADDED CODE END
             preferred_method: None,
         });
         let (needs, label, method_id, mode) = startup_auth_metadata(&built.methods);

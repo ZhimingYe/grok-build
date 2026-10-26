@@ -66,10 +66,31 @@ pub struct AuthMethodsBuildInputs<'a> {
     pub login_label: Option<&'a str>,
     /// True if `grok_com_config.auth_provider_command` is configured (sets `meta.external_provider = true` on the `grok.com` method).
     pub has_auth_provider_command: bool,
+    // ZMY SELF-ADDED CODE START
+    /// True when API-key authentication is disabled by deployment policy.
+    pub disable_api_key_auth: bool,
+    // ZMY SELF-ADDED CODE END
     /// Config pin (`[auth] preferred_method`).
     /// `None` keeps multi-method fallthrough; `Some` is fail-closed (only that method family).
     pub preferred_method: Option<PreferredAuthMethod>,
 }
+
+// ZMY SELF-ADDED CODE START
+pub(crate) const OPTIONAL_ACCOUNT_LOGIN_REQUIRED_MESSAGE: &str =
+    "No API key is configured. Set XAI_API_KEY or run `grok login` to sign in explicitly.";
+
+pub(crate) fn optional_account_login_allowed(
+    preferred_method: Option<PreferredAuthMethod>,
+    has_enterprise_oidc: bool,
+    has_auth_provider_command: bool,
+    disable_api_key_auth: bool,
+) -> bool {
+    preferred_method.is_none()
+        && !has_enterprise_oidc
+        && !has_auth_provider_command
+        && !disable_api_key_auth
+}
+// ZMY SELF-ADDED CODE END
 
 /// Output of [`build_auth_methods`].
 pub struct BuiltAuthMethods {
@@ -93,6 +114,9 @@ pub fn build_auth_methods(inputs: AuthMethodsBuildInputs<'_>) -> BuiltAuthMethod
         enterprise_oidc_issuer,
         login_label,
         has_auth_provider_command,
+        // ZMY SELF-ADDED CODE START
+        disable_api_key_auth,
+        // ZMY SELF-ADDED CODE END
         preferred_method,
     } = inputs;
 
@@ -112,6 +136,9 @@ pub fn build_auth_methods(inputs: AuthMethodsBuildInputs<'_>) -> BuiltAuthMethod
             enterprise_oidc_issuer,
             login_label,
             has_auth_provider_command,
+            // ZMY SELF-ADDED CODE START
+            disable_api_key_auth,
+            // ZMY SELF-ADDED CODE END
         ),
     }
 }
@@ -170,6 +197,9 @@ fn build_unpinned(
     enterprise_oidc_issuer: Option<&str>,
     login_label: Option<&str>,
     has_auth_provider_command: bool,
+    // ZMY SELF-ADDED CODE START
+    disable_api_key_auth: bool,
+    // ZMY SELF-ADDED CODE END
 ) -> BuiltAuthMethods {
     let mut methods: Vec<acp::AuthMethod> = Vec::new();
     let mut default_auth_method_id: Option<acp::AuthMethodId> = None;
@@ -204,6 +234,21 @@ fn build_unpinned(
         has_auth_provider_command,
     );
 
+    // ZMY SELF-ADDED CODE START
+    // Default account login is opt-in; configured providers and pinned auth remain mandatory.
+    if optional_account_login_allowed(
+        None,
+        has_enterprise_oidc,
+        has_auth_provider_command,
+        disable_api_key_auth,
+    ) && let Some(acp::AuthMethod::Agent(method)) = methods.last_mut()
+    {
+        method
+            .meta
+            .get_or_insert_with(Default::default)
+            .insert("optional_login".to_owned(), serde_json::json!(true));
+    }
+    // ZMY SELF-ADDED CODE END
     BuiltAuthMethods {
         methods,
         default_auth_method_id,
@@ -468,6 +513,9 @@ mod tests {
             enterprise_oidc_issuer: None,
             login_label: None,
             has_auth_provider_command: false,
+            // ZMY SELF-ADDED CODE START
+            disable_api_key_auth: false,
+            // ZMY SELF-ADDED CODE END
             preferred_method: None,
         }
     }
@@ -582,16 +630,77 @@ mod tests {
         );
     }
 
-    /// Brand-new user (no API key, no cached token): only `grok.com` is advertised, and the pager will (correctly) show the login screen.
-    /// `default_auth_method_id` is None so the pager falls back to the advertised login method.
+    // ZMY SELF-ADDED CODE START
+    /// Fresh users may opt into account login, but startup must not require it.
     #[test]
-    fn fresh_user_only_advertises_grok_com_and_requires_login() {
+    fn fresh_user_advertises_optional_grok_com_login() {
         let built = build_auth_methods(default_inputs());
 
         assert_eq!(first_kind(&built.methods), Some(AuthMethodKind::GrokCom));
         assert!(built.default_auth_method_id.is_none());
         assert_eq!(built.methods.len(), 1);
+        assert_eq!(
+            built.methods[0].meta().as_ref().unwrap()["optional_login"],
+            true
+        );
     }
+
+    #[test]
+    fn fork_optional_account_login_requires_unpinned_default_policy() {
+        for (preferred_method, has_enterprise_oidc, has_provider, disabled, expected) in [
+            (None, false, false, false, true),
+            (
+                Some(PreferredAuthMethod::ApiKey),
+                false,
+                false,
+                false,
+                false,
+            ),
+            (Some(PreferredAuthMethod::Oidc), false, false, false, false),
+            (None, true, false, false, false),
+            (None, false, true, false, false),
+            (None, false, false, true, false),
+        ] {
+            assert_eq!(
+                optional_account_login_allowed(
+                    preferred_method,
+                    has_enterprise_oidc,
+                    has_provider,
+                    disabled,
+                ),
+                expected,
+            );
+        }
+        let forced_team = xai_grok_login::GrokComConfig {
+            force_login_team_uuid: Some(xai_grok_login::ForceLoginTeam::Single(
+                "required-team".to_owned(),
+            )),
+            ..Default::default()
+        };
+        assert!(forced_team.api_key_auth_disabled());
+        assert!(!optional_account_login_allowed(
+            None,
+            false,
+            false,
+            forced_team.api_key_auth_disabled(),
+        ));
+    }
+
+    #[test]
+    fn fork_api_key_auth_lockdown_keeps_default_login_required() {
+        let built = build_auth_methods(AuthMethodsBuildInputs {
+            disable_api_key_auth: true,
+            ..default_inputs()
+        });
+        let grok = built.methods.first().expect("grok.com login is advertised");
+        assert_eq!(first_kind(&built.methods), Some(AuthMethodKind::GrokCom));
+        assert!(
+            !grok
+                .meta()
+                .is_some_and(|meta| meta.get("optional_login").is_some()),
+        );
+    }
+    // ZMY SELF-ADDED CODE END
 
     /// Enterprise OIDC replaces `grok.com` (mutually exclusive).
     /// xai.api_key, when present, still leads.
