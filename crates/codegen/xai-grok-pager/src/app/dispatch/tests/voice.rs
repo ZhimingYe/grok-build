@@ -380,7 +380,9 @@ fn voice_ctrl_space_release_leaves_toggle_recording_running() {
     );
 }
 
-/// A free-tier user hitting the voice keybinding gets the SuperGrok upsell instead of a doomed voice session.
+// ZMY SELF-ADDED CODE START
+/// A restricted user hitting the voice keybinding gets neutral provider guidance instead of a doomed voice session.
+// ZMY SELF-ADDED CODE END
 /// The keybinding bypasses the slash registry, so this dispatcher is the enforcement point.
 #[test]
 fn voice_keybinding_on_restricted_tier_opens_upsell() {
@@ -395,10 +397,17 @@ fn voice_keybinding_on_restricted_tier_opens_upsell() {
 
     dispatch(Action::EnableVoiceMode, &mut app);
 
+    // ZMY SELF-ADDED CODE START
     assert!(
-        app.agents.get(&AgentId(0)).unwrap().question_view.is_some(),
-        "restricted-tier voice keybinding must open the SuperGrok upsell"
+        app.agents
+            .get(&AgentId(0))
+            .unwrap()
+            .toast
+            .as_ref()
+            .is_some_and(|(message, _)| message.contains("configured provider")),
+        "restricted-tier voice keybinding must show provider guidance"
     );
+    // ZMY SELF-ADDED CODE END
     assert!(
         !app.voice_listening(),
         "voice must not start on a restricted tier"

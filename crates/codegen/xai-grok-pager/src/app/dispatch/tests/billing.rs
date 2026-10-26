@@ -1,58 +1,77 @@
-//! Tests for credit-limit upsells, paywall gating, and auto-topup.
+// ZMY SELF-ADDED CODE START
+//! Tests for provider-neutral usage handling and auto-topup.
+// ZMY SELF-ADDED CODE END
 
 use super::*;
+// ZMY SELF-ADDED CODE START
+use crate::app::dispatch::billing::open_restricted_command_upsell;
+// ZMY SELF-ADDED CODE END
 use xai_grok_shell::sampling::error::is_free_usage_exhausted_error;
 
-/// Open the non-max-tier Q&A upsell modal. Panics if the modal was not created.
-fn open_upsell_qa(app: &mut AppView, mode: CreditLimitUpsellMode) {
+// ZMY SELF-ADDED CODE START
+#[test]
+fn fork_provider_neutral_upsells_show_actionable_status_without_links() {
+    let mut app = test_app_with_agent();
     let agent = app.agents.get_mut(&AgentId(0)).unwrap();
-    open_credit_limit_upsell(agent, mode, false);
-}
+    open_credit_limit_upsell(agent, CreditLimitUpsellMode::UnifiedCredits, false);
+    let message = agent.toast.as_ref().unwrap().0.as_str();
+    assert!(message.contains("configured provider"));
+    assert!(message.contains("configure another provider"));
+    assert!(agent.question_view.is_none());
+    assert!(!message.contains("grok.com"));
 
-/// Open the max-tier inline scrollback card upsell.
-fn open_upsell_max_card(app: &mut AppView, mode: CreditLimitUpsellMode) {
-    let agent = app.agents.get_mut(&AgentId(0)).unwrap();
-    open_credit_limit_upsell(agent, mode, true);
-}
+    assert!(open_restricted_command_upsell(agent, None));
+    let message = agent.toast.as_ref().unwrap().0.as_str();
+    assert!(message.contains("configured provider"));
+    assert!(agent.question_view.is_none());
+    assert!(!message.contains("grok.com"));
 
-/// Return the `QuestionViewState` from agent 0. Panics if absent.
-fn agent_qv(app: &AppView) -> &crate::views::question_view::QuestionViewState {
-    app.agents
-        .get(&AgentId(0))
-        .unwrap()
-        .question_view
+    open_free_usage_upsell(agent, None);
+    let message = agent.toast.as_ref().unwrap().0.as_str();
+    assert!(message.contains("configured provider"));
+    assert!(agent.question_view.is_none());
+    assert!(!message.contains("grok.com"));
+
+    assert!(dispatch(Action::OpenSupergrokUrl, &mut app).is_empty());
+    let message = test_agent(&app, AgentId(0))
+        .toast
         .as_ref()
         .unwrap()
+        .0
+        .as_str();
+    assert!(message.contains("custom provider"));
+    assert!(!message.contains("grok.com"));
 }
+// ZMY SELF-ADDED CODE END
 
-fn first_question(
-    qv: &crate::views::question_view::QuestionViewState,
-) -> &crate::views::question_view::Question {
-    match qv.questions.first() {
-        Some(q) => q,
-        None => panic!("expected a question"),
+// ZMY SELF-ADDED CODE START
+#[test]
+fn fork_credit_limit_modes_show_provider_neutral_status() {
+    for mode in [
+        CreditLimitUpsellMode::UnifiedCredits,
+        CreditLimitUpsellMode::LegacyPayg { enabled: false },
+        CreditLimitUpsellMode::LegacyPayg { enabled: true },
+    ] {
+        let mut app = test_app_with_agent();
+        let agent = app.agents.get_mut(&AgentId(0)).unwrap();
+        open_credit_limit_upsell(agent, mode, false);
+
+        let message = agent.toast.as_ref().unwrap().0.as_str();
+        let expected = match mode {
+            CreditLimitUpsellMode::UnifiedCredits => "no credits remain",
+            CreditLimitUpsellMode::LegacyPayg { .. } => "spending limit was reached",
+        };
+        assert!(message.contains(expected), "{message}");
+        assert!(message.contains("configure another provider"));
+        assert!(!message.contains("grok.com"));
+        assert!(agent.question_view.is_none());
     }
 }
+// ZMY SELF-ADDED CODE END
 
-fn option_at(
-    q: &crate::views::question_view::Question,
-    i: usize,
-) -> &crate::views::question_view::QuestionOption {
-    match q.options.get(i) {
-        Some(o) => o,
-        None => panic!("expected option {i}"),
-    }
-}
-
-fn set_first_selection(
-    qv: &mut crate::views::question_view::QuestionViewState,
-    sel: crate::views::question_view::QuestionSelection,
-) {
-    match qv.selections.first_mut() {
-        Some(slot) => *slot = sel,
-        None => panic!("expected a selection slot"),
-    }
-}
+// ZMY SELF-ADDED CODE START
+// Removed helpers used only by obsolete official billing-modal tests.
+// ZMY SELF-ADDED CODE END
 
 fn test_stashed_prompt(text: &str) -> crate::app::agent::InFlightPrompt {
     crate::app::agent::InFlightPrompt {
@@ -137,8 +156,9 @@ fn credit_limit_retry_preserves_image_submission_state() {
     assert_eq!(in_flight.chip_elements.len(), 1);
 }
 
+// ZMY SELF-ADDED CODE START
 #[test]
-fn credit_limit_recheck_keeps_stash_when_showing_upsell() {
+fn credit_limit_recheck_keeps_stash_when_showing_neutral_notice() {
     let mut app = test_app_with_agent();
     app.agents
         .get_mut(&AgentId(0))
@@ -153,7 +173,13 @@ fn credit_limit_recheck_keeps_stash_when_showing_upsell() {
         &mut app,
     );
     let agent = app.agents.get(&AgentId(0)).unwrap();
-    assert!(agent.question_view.is_some());
+    assert!(agent.question_view.is_none());
+    assert!(
+        agent
+            .toast
+            .as_ref()
+            .is_some_and(|(message, _)| message.contains("configured provider"))
+    );
     assert_eq!(
         agent
             .credit_limit_stashed_prompt
@@ -162,6 +188,7 @@ fn credit_limit_recheck_keeps_stash_when_showing_upsell() {
         Some("retry me")
     );
 }
+// ZMY SELF-ADDED CODE END
 
 #[test]
 fn credit_limit_recheck_drops_stash_when_user_moved_on() {
@@ -286,57 +313,9 @@ fn retry_credit_limit_prompt_toasts_when_stash_empty() {
     assert!(has_system, "minimal mode has no toast; need a system line");
 }
 
-#[test]
-fn credit_limit_translate_retry_option_dispatches_retry() {
-    use crate::app::agent_view::translate_local_submit_for_test;
-    use crate::app::app_view::InputOutcome;
-    use crate::views::question_view::QuestionSelection;
-
-    let mut app = test_app_with_agent();
-    open_upsell_qa(&mut app, CreditLimitUpsellMode::UnifiedCredits);
-    let mut qv = app
-        .agents
-        .get_mut(&AgentId(0))
-        .unwrap()
-        .question_view
-        .take()
-        .expect("expected credit-limit upsell modal");
-    set_first_selection(&mut qv, QuestionSelection::Single(Some(2)));
-    let kind = qv
-        .local_kind
-        .take()
-        .expect("open_credit_limit_upsell sets local_kind");
-    match translate_local_submit_for_test(&qv, kind, false) {
-        InputOutcome::Action(Action::RetryCreditLimitPrompt) => {}
-        other => panic!("expected RetryCreditLimitPrompt, got {other:?}"),
-    }
-}
-
-#[test]
-fn credit_limit_translate_max_tier_retry_is_second_option() {
-    use crate::app::agent_view::translate_local_submit_for_test;
-    use crate::app::app_view::InputOutcome;
-    use crate::views::question_view::QuestionSelection;
-
-    let mut app = test_app_with_agent();
-    open_upsell_max_card(&mut app, CreditLimitUpsellMode::UnifiedCredits);
-    let mut qv = app
-        .agents
-        .get_mut(&AgentId(0))
-        .unwrap()
-        .question_view
-        .take()
-        .expect("expected credit-limit upsell modal");
-    set_first_selection(&mut qv, QuestionSelection::Single(Some(1)));
-    let kind = qv
-        .local_kind
-        .take()
-        .expect("open_credit_limit_upsell sets local_kind");
-    match translate_local_submit_for_test(&qv, kind, false) {
-        InputOutcome::Action(Action::RetryCreditLimitPrompt) => {}
-        other => panic!("expected RetryCreditLimitPrompt, got {other:?}"),
-    }
-}
+// ZMY SELF-ADDED CODE START
+// Removed obsolete official billing-modal tests; provider-neutral guidance is covered by fork regressions.
+// ZMY SELF-ADDED CODE END
 
 #[test]
 fn is_max_tier_positive_match() {
@@ -368,161 +347,9 @@ fn is_max_tier_rejects_partial_matches() {
     assert!(!is_max_tier(Some("")));
 }
 
-#[test]
-fn upsell_non_max_shows_qa_with_retry_option() {
-    let mut app = test_app_with_agent();
-    open_upsell_qa(
-        &mut app,
-        CreditLimitUpsellMode::LegacyPayg { enabled: false },
-    );
-    let q = first_question(agent_qv(&app));
-    assert_eq!(q.options.len(), 3);
-    assert_eq!(option_at(q, 0).label, "Upgrade tier");
-    assert_eq!(option_at(q, 0).id.as_deref(), Some(UPSELL_URL_UPGRADE));
-    assert_eq!(option_at(q, 1).label, "Pay as you go");
-    assert_eq!(option_at(q, 1).id.as_deref(), Some(UPSELL_URL_PAYG));
-    assert_eq!(option_at(q, 2).label, "Try Again");
-    assert_eq!(
-        option_at(q, 2).id.as_deref(),
-        Some(crate::app::dispatch::CREDIT_LIMIT_RETRY_OPTION_ID)
-    );
-}
-
-#[test]
-fn upsell_non_max_payg_on_shows_increase_label() {
-    let mut app = test_app_with_agent();
-    open_upsell_qa(
-        &mut app,
-        CreditLimitUpsellMode::LegacyPayg { enabled: true },
-    );
-    let q = first_question(agent_qv(&app));
-    assert_eq!(q.options.len(), 3);
-    assert_eq!(option_at(q, 1).label, "Increase limit");
-    assert_eq!(option_at(q, 2).label, "Try Again");
-}
-
-#[test]
-fn upsell_non_max_qa_heading_is_credit_limit_when_payg_off() {
-    let mut app = test_app_with_agent();
-    open_upsell_qa(
-        &mut app,
-        CreditLimitUpsellMode::LegacyPayg { enabled: false },
-    );
-    let heading = &first_question(agent_qv(&app)).question;
-    assert!(
-        heading.contains("credit limit"),
-        "expected 'credit limit' in heading, got: {heading}"
-    );
-}
-
-#[test]
-fn upsell_non_max_qa_heading_is_spending_cap_when_payg_on() {
-    let mut app = test_app_with_agent();
-    open_upsell_qa(
-        &mut app,
-        CreditLimitUpsellMode::LegacyPayg { enabled: true },
-    );
-    let heading = &first_question(agent_qv(&app)).question;
-    assert!(
-        heading.contains("spending cap"),
-        "expected 'spending cap' in heading, got: {heading}"
-    );
-}
-
-#[test]
-fn upsell_non_max_upgrade_url_is_supergrok() {
-    let mut app = test_app_with_agent();
-    open_upsell_qa(
-        &mut app,
-        CreditLimitUpsellMode::LegacyPayg { enabled: false },
-    );
-    let url = option_at(first_question(agent_qv(&app)), 0)
-        .id
-        .as_deref()
-        .unwrap();
-    assert!(url.contains("supergrok"), "got: {url}");
-    assert!(url.contains("referrer=grok-build"), "got: {url}");
-}
-
-#[test]
-fn upsell_non_max_payg_url_is_usage() {
-    let mut app = test_app_with_agent();
-    open_upsell_qa(
-        &mut app,
-        CreditLimitUpsellMode::LegacyPayg { enabled: false },
-    );
-    let url = option_at(first_question(agent_qv(&app)), 1)
-        .id
-        .as_deref()
-        .unwrap();
-    assert!(url.contains("_s=usage"), "got: {url}");
-}
-
-#[test]
-fn upsell_non_max_payg_on_description_mentions_spending_cap() {
-    let mut app = test_app_with_agent();
-    open_upsell_qa(
-        &mut app,
-        CreditLimitUpsellMode::LegacyPayg { enabled: true },
-    );
-    assert_eq!(
-        option_at(first_question(agent_qv(&app)), 1).description,
-        "Raise your pay-as-you-go spending cap"
-    );
-}
-
-#[test]
-fn upsell_non_max_payg_off_description_mentions_on_demand() {
-    let mut app = test_app_with_agent();
-    open_upsell_qa(
-        &mut app,
-        CreditLimitUpsellMode::LegacyPayg { enabled: false },
-    );
-    assert_eq!(
-        option_at(first_question(agent_qv(&app)), 1).description,
-        "Enable pay-as-you-go credits for on-demand usage"
-    );
-}
-
-#[test]
-fn upsell_non_max_unified_shows_buy_credits() {
-    let mut app = test_app_with_agent();
-    open_upsell_qa(&mut app, CreditLimitUpsellMode::UnifiedCredits);
-    let q = first_question(agent_qv(&app));
-    assert!(q.question.contains("weekly limit"));
-    assert_eq!(
-        option_at(q, 0).description,
-        "Upgrade to a higher tier for more usage"
-    );
-    assert_eq!(option_at(q, 1).label, "Buy more credits");
-    assert_eq!(
-        option_at(q, 1).description,
-        "Purchase credits to keep using Grok Build"
-    );
-    assert_eq!(option_at(q, 2).label, "Try Again");
-}
-
-#[test]
-fn upsell_max_unified_qa_omits_upgrade() {
-    let mut app = test_app_with_agent();
-    let before = agent_scrollback_len(&app);
-    open_upsell_max_card(&mut app, CreditLimitUpsellMode::UnifiedCredits);
-    assert_eq!(
-        agent_scrollback_len(&app),
-        before,
-        "max-tier upsell must not push a scrollback card"
-    );
-    let q = first_question(agent_qv(&app));
-    assert!(q.question.contains("weekly limit"));
-    assert_eq!(q.options.len(), 2);
-    assert_eq!(option_at(q, 0).label, "Buy more credits");
-    assert_eq!(option_at(q, 0).id.as_deref(), Some(UPSELL_URL_PAYG));
-    assert_eq!(option_at(q, 1).label, "Try Again");
-    assert_eq!(
-        option_at(q, 1).id.as_deref(),
-        Some(crate::app::dispatch::CREDIT_LIMIT_RETRY_OPTION_ID)
-    );
-}
+// ZMY SELF-ADDED CODE START
+// Removed obsolete official billing-modal tests; provider-neutral guidance is covered by fork regressions.
+// ZMY SELF-ADDED CODE END
 
 #[test]
 fn credit_limit_upsell_mode_prefers_unified_flag() {
@@ -581,146 +408,9 @@ fn is_credit_limit_error_matches_legacy_403_and_pool_402() {
     ));
 }
 
-#[test]
-fn upsell_non_max_sets_no_freeform() {
-    let mut app = test_app_with_agent();
-    open_upsell_qa(
-        &mut app,
-        CreditLimitUpsellMode::LegacyPayg { enabled: false },
-    );
-    assert!(
-        agent_qv(&app).no_freeform,
-        "upsell Q&A should disable freeform input"
-    );
-}
-
-#[test]
-fn upsell_non_max_qa_has_single_select() {
-    let mut app = test_app_with_agent();
-    open_upsell_qa(
-        &mut app,
-        CreditLimitUpsellMode::LegacyPayg { enabled: false },
-    );
-    assert_eq!(
-        first_question(agent_qv(&app)).multi_select,
-        Some(false),
-        "upsell should be single-select"
-    );
-}
-
-#[test]
-fn upsell_non_max_does_not_push_scrollback_block() {
-    let mut app = test_app_with_agent();
-    let before = agent_scrollback_len(&app);
-    open_upsell_qa(
-        &mut app,
-        CreditLimitUpsellMode::LegacyPayg { enabled: false },
-    );
-    assert_eq!(
-        agent_scrollback_len(&app),
-        before,
-        "non-max-tier upsell should NOT push a scrollback block"
-    );
-}
-
-#[test]
-fn upsell_non_max_idempotent_when_question_view_already_open() {
-    let mut app = test_app_with_agent();
-    open_upsell_qa(
-        &mut app,
-        CreditLimitUpsellMode::LegacyPayg { enabled: false },
-    );
-    assert!(app.agents.get(&AgentId(0)).unwrap().question_view.is_some());
-
-    // Second call should be a no-op (open_credit_limit_upsell returns if a modal is already open).
-    let before = agent_scrollback_len(&app);
-    open_upsell_qa(
-        &mut app,
-        CreditLimitUpsellMode::LegacyPayg { enabled: false },
-    );
-    assert_eq!(
-        agent_scrollback_len(&app),
-        before,
-        "second call should not push a block"
-    );
-}
-
-#[test]
-fn upsell_max_tier_opens_qa_without_upgrade_payg_off() {
-    let mut app = test_app_with_agent();
-    let before = agent_scrollback_len(&app);
-    open_upsell_max_card(
-        &mut app,
-        CreditLimitUpsellMode::LegacyPayg { enabled: false },
-    );
-    assert!(app.agents.get(&AgentId(0)).unwrap().question_view.is_some());
-    assert_eq!(agent_scrollback_len(&app), before);
-    let q = first_question(agent_qv(&app));
-    assert!(q.question.contains("credit limit"));
-    assert_eq!(q.options.len(), 2);
-    assert_eq!(option_at(q, 0).label, "Pay as you go");
-    assert_eq!(option_at(q, 0).id.as_deref(), Some(UPSELL_URL_PAYG));
-    assert_eq!(option_at(q, 1).label, "Try Again");
-}
-
-#[test]
-fn upsell_max_tier_opens_qa_without_upgrade_payg_on() {
-    let mut app = test_app_with_agent();
-    open_upsell_max_card(
-        &mut app,
-        CreditLimitUpsellMode::LegacyPayg { enabled: true },
-    );
-    let q = first_question(agent_qv(&app));
-    assert!(q.question.contains("spending cap"));
-    assert_eq!(q.options.len(), 2);
-    assert_eq!(option_at(q, 0).label, "Increase limit");
-    assert_eq!(option_at(q, 1).label, "Try Again");
-}
-
-#[test]
-fn upsell_max_tier_opens_question_view() {
-    let mut app = test_app_with_agent();
-    open_upsell_max_card(
-        &mut app,
-        CreditLimitUpsellMode::LegacyPayg { enabled: false },
-    );
-    assert!(
-        app.agents.get(&AgentId(0)).unwrap().question_view.is_some(),
-        "max-tier should use the question modal"
-    );
-}
-
-#[test]
-fn upsell_max_tier_buy_url_is_payg() {
-    let mut app = test_app_with_agent();
-    open_upsell_max_card(
-        &mut app,
-        CreditLimitUpsellMode::LegacyPayg { enabled: false },
-    );
-    assert_eq!(
-        option_at(first_question(agent_qv(&app)), 0).id.as_deref(),
-        Some(UPSELL_URL_PAYG)
-    );
-}
-
-#[test]
-fn upsell_max_tier_idempotent_when_question_view_already_open() {
-    let mut app = test_app_with_agent();
-    open_upsell_max_card(
-        &mut app,
-        CreditLimitUpsellMode::LegacyPayg { enabled: false },
-    );
-    let first_id = agent_qv(&app).tool_call_id.clone();
-    open_upsell_max_card(
-        &mut app,
-        CreditLimitUpsellMode::LegacyPayg { enabled: false },
-    );
-    assert_eq!(
-        agent_qv(&app).tool_call_id,
-        first_id,
-        "second call must not replace the open modal"
-    );
-}
+// ZMY SELF-ADDED CODE START
+// Removed obsolete official billing-modal tests; provider-neutral guidance is covered by fork regressions.
+// ZMY SELF-ADDED CODE END
 
 fn is_session_usage_fetch(effects: &[Effect]) -> bool {
     matches!(
@@ -810,6 +500,7 @@ fn team_auth_disables_agent_billing_surface() {
 }
 
 #[serial_test::serial(GROK_TEST_OPEN_URL_FILE)]
+// ZMY SELF-ADDED CODE START
 #[test]
 fn manage_billing_gates_on_consumer_billing_surface() {
     let out = std::env::temp_dir().join(format!("grok-manage-billing-{}.txt", std::process::id()));
@@ -819,7 +510,16 @@ fn manage_billing_gates_on_consumer_billing_surface() {
     let mut app = test_app_with_agent();
     dispatch(Action::ManageBilling, &mut app);
     let opened = std::fs::read_to_string(&out).unwrap_or_default();
-    assert!(opened.contains("grok.com/?_s=usage"), "got: {opened}");
+    assert!(
+        opened.is_empty(),
+        "official billing URL was opened: {opened}"
+    );
+    assert!(
+        test_agent(&app, AgentId(0))
+            .toast
+            .as_ref()
+            .is_none_or(|(message, _)| !message.contains("grok.com"))
+    );
     let _ = std::fs::remove_file(&out);
 
     // Non-consumer: silent no-op (slash command never offers manage).
@@ -829,6 +529,7 @@ fn manage_billing_gates_on_consumer_billing_surface() {
     assert!(dispatch(Action::ManageBilling, &mut app).is_empty());
     assert_eq!(agent_scrollback_len(&app), before);
 }
+// ZMY SELF-ADDED CODE END
 
 #[test]
 fn session_usage_complete_pushes_block_and_chains_billing() {
@@ -1253,8 +954,9 @@ fn free_usage_error_detected_by_embedded_code() {
     ));
 }
 
+// ZMY SELF-ADDED CODE START
 #[test]
-fn free_usage_upsell_displaces_feedback_before_opening_question() {
+fn free_usage_upsell_preserves_feedback_and_shows_neutral_status() {
     let mut app = test_app_with_agent();
     let agent = app.agents.get_mut(&AgentId(0)).unwrap();
     agent.feedback_modal = Some(crate::views::feedback_modal::FeedbackModalState::new(
@@ -1265,57 +967,27 @@ fn free_usage_upsell_displaces_feedback_before_opening_question() {
     ));
 
     open_free_usage_upsell(agent, None);
-
-    assert!(agent.feedback_modal.is_none());
-    assert!(agent.question_view.is_some());
+    assert!(agent.feedback_modal.is_some());
+    assert!(agent.question_view.is_none());
+    assert!(
+        agent
+            .toast
+            .as_ref()
+            .is_some_and(|(message, _)| message.contains("configured provider"))
+    );
 }
+// ZMY SELF-ADDED CODE END
 
+// ZMY SELF-ADDED CODE START
+// Removed this upstream official billing-modal test; provider-neutral guidance is covered by fork regressions.
+// ZMY SELF-ADDED CODE END
+
+// ZMY SELF-ADDED CODE START
+/// Replay the free-usage sequence through production handlers and verify neutral quota guidance.
+// ZMY SELF-ADDED CODE END
+// ZMY SELF-ADDED CODE START
 #[test]
-fn free_usage_upsell_shows_three_options_with_exact_labels() {
-    let mut app = test_app_with_agent();
-    let agent = app.agents.get_mut(&AgentId(0)).unwrap();
-    open_free_usage_upsell(agent, None);
-
-    let qv = agent_qv(&app);
-    assert!(matches!(
-        qv.local_kind,
-        Some(
-            crate::views::question_view::LocalQuestionKind::FreeUsageUpsell {
-                source: xai_grok_telemetry::events::SuperGrokUpsell::FreeUsagePaywall,
-            }
-        )
-    ));
-    let q = first_question(qv);
-    assert_eq!(q.question, "You hit your free usage limit.");
-    let expected = [
-        (
-            "Upgrade to SuperGrok",
-            "For everyday coding and productivity tasks",
-            Some(UPSELL_URL_UPGRADE),
-        ),
-        (
-            "Upgrade to SuperGrok Plus",
-            "Significantly higher usage and rate limits",
-            Some(UPSELL_URL_UPGRADE),
-        ),
-        (
-            "Upgrade to SuperGrok Heavy",
-            "Get the most out of Grok Build. Highest usage limits.",
-            Some(UPSELL_URL_UPGRADE),
-        ),
-    ];
-    assert_eq!(q.options.len(), expected.len());
-    for (opt, (label, desc, id)) in q.options.iter().zip(expected) {
-        assert_eq!(opt.label, label);
-        assert_eq!(opt.description, desc);
-        assert_eq!(opt.id.as_deref(), id);
-    }
-}
-
-/// Replay the REAL free-usage sequence (send, `RetryState::Retrying`, `Exhausted`, PromptResponse error) through the production handlers.
-/// The paywall modal must open on the turn-end error.
-#[test]
-fn free_usage_failure_opens_paywall_modal() {
+fn free_usage_failure_shows_provider_neutral_status() {
     use crate::app::acp_handler::apply_session_event_for_test;
     use xai_grok_shell::extensions::notification::{RetryState, SessionUpdate};
 
@@ -1358,7 +1030,7 @@ fn free_usage_failure_opens_paywall_modal() {
         assert!(agent.session.free_usage_blocked);
     }
 
-    // 4. Turn-end RPC error opens the upsell modal.
+    // 4. Turn-end RPC error shows provider-neutral quota guidance.
     let _ = dispatch(
         Action::TaskComplete(TaskResult::PromptResponse {
             agent_id: id,
@@ -1368,39 +1040,27 @@ fn free_usage_failure_opens_paywall_modal() {
         }),
         &mut app,
     );
+    let agent = test_agent(&app, id);
+    assert!(agent.question_view.is_none());
     assert!(
-        test_agent(&app, id).question_view.is_some(),
-        "paywall modal must open"
+        agent
+            .toast
+            .as_ref()
+            .is_some_and(|(message, _)| message.contains("configured provider"))
     );
 }
+// ZMY SELF-ADDED CODE END
 
-/// Answer translation: every upgrade option opens the upgrade URL.
+// ZMY SELF-ADDED CODE START
+// Removed this upstream official billing-modal test; provider-neutral guidance is covered by fork regressions.
+// ZMY SELF-ADDED CODE END
+
+// ZMY SELF-ADDED CODE START
+/// A tier-restricted command remains blocked and shows neutral configured-provider guidance.
+// ZMY SELF-ADDED CODE END
+// ZMY SELF-ADDED CODE START
 #[test]
-fn free_usage_translate_local_submit_maps_options() {
-    use crate::app::agent_view::translate_local_submit_for_test;
-    use crate::app::app_view::InputOutcome;
-    use crate::views::question_view::{LocalQuestionKind, QuestionSelection};
-
-    let mut app = test_app_with_agent();
-    let agent = app.agents.get_mut(&AgentId(0)).unwrap();
-    open_free_usage_upsell(agent, None);
-    let mut qv = agent.question_view.take().unwrap();
-    let kind = || LocalQuestionKind::FreeUsageUpsell {
-        source: xai_grok_telemetry::events::SuperGrokUpsell::FreeUsagePaywall,
-    };
-
-    for idx in [0, 1, 2] {
-        set_first_selection(&mut qv, QuestionSelection::Single(Some(idx)));
-        match translate_local_submit_for_test(&qv, kind(), false) {
-            InputOutcome::Action(Action::OpenUrl(url)) => assert_eq!(url, UPSELL_URL_UPGRADE),
-            other => panic!("expected OpenUrl for option {idx}, got {other:?}"),
-        }
-    }
-}
-
-/// Submitting a tier-restricted command opens the three-option SuperGrok upsell and neither runs the command nor leaks the text to the model.
-#[test]
-fn restricted_command_submit_opens_three_option_upsell() {
+fn restricted_command_submit_shows_neutral_status() {
     let mut app = test_app_with_agent();
     let id = AgentId(0);
     app.agents
@@ -1420,30 +1080,22 @@ fn restricted_command_submit_opens_three_option_upsell() {
         "restricted command must not be enqueued"
     );
     assert!(agent.prompt.text().is_empty(), "composer consumed");
-
-    let qv = agent_qv(&app);
-    assert!(matches!(
-        qv.local_kind,
-        Some(
-            crate::views::question_view::LocalQuestionKind::FreeUsageUpsell {
-                source: xai_grok_telemetry::events::SuperGrokUpsell::RestrictedCommand,
-            }
-        )
-    ));
-    let q = first_question(qv);
-    assert_eq!(q.question, "Unlock all features with SuperGrok.");
-    assert_eq!(q.options.len(), 3);
-    assert_eq!(option_at(q, 0).label, "Upgrade to SuperGrok");
-    assert_eq!(option_at(q, 0).id.as_deref(), Some(UPSELL_URL_UPGRADE));
-    assert_eq!(option_at(q, 1).label, "Upgrade to SuperGrok Plus");
-    assert_eq!(option_at(q, 1).id.as_deref(), Some(UPSELL_URL_UPGRADE));
-    assert_eq!(option_at(q, 2).label, "Upgrade to SuperGrok Heavy");
-    assert_eq!(option_at(q, 2).id.as_deref(), Some(UPSELL_URL_UPGRADE));
+    assert!(agent.question_view.is_none());
+    assert!(
+        agent
+            .toast
+            .as_ref()
+            .is_some_and(|(message, _)| message.contains("configured provider"))
+    );
 }
+// ZMY SELF-ADDED CODE END
 
-/// Aliases of a restricted command hit the same upsell (deny-list matching covers aliases via the registry).
+// ZMY SELF-ADDED CODE START
+/// Aliases of a restricted command show the same provider-neutral status.
+// ZMY SELF-ADDED CODE END
+// ZMY SELF-ADDED CODE START
 #[test]
-fn restricted_command_alias_also_upsells() {
+fn restricted_command_alias_shows_neutral_status() {
     let mut app = test_app_with_agent();
     let id = AgentId(0);
     app.agents
@@ -1454,15 +1106,23 @@ fn restricted_command_alias_also_upsells() {
     let effects = dispatch(Action::SendPrompt("/cost".into()), &mut app);
 
     assert!(effects.is_empty());
+    let agent = test_agent(&app, id);
+    assert!(agent.question_view.is_none());
     assert!(
-        test_agent(&app, id).question_view.is_some(),
-        "upsell must open"
+        agent
+            .toast
+            .as_ref()
+            .is_some_and(|(message, _)| message.contains("configured provider"))
     );
 }
+// ZMY SELF-ADDED CODE END
 
-/// A restricted submit while ANOTHER question modal is already open must not silently drop the typed text.
-/// The upsell can't open (the guard never displaces a modal), so the composer keeps the text for a resubmit after the modal closes.
+// ZMY SELF-ADDED CODE START
+/// A restricted submit while another question modal is open must preserve the typed text.
+/// The composer keeps the text for a resubmit after the existing modal closes.
+// ZMY SELF-ADDED CODE END
 /// No passthrough, nothing enqueued, and the existing modal survives untouched.
+// ZMY SELF-ADDED CODE START
 #[test]
 fn restricted_command_with_open_modal_keeps_composer_text() {
     let mut app = test_app_with_agent();
@@ -1470,8 +1130,11 @@ fn restricted_command_with_open_modal_keeps_composer_text() {
     {
         let agent = app.agents.get_mut(&id).unwrap();
         agent.set_restricted_commands(&["imagine".to_string()]);
-        // A question modal is already up (credit-limit upsell).
-        open_credit_limit_upsell(agent, CreditLimitUpsellMode::UnifiedCredits, false);
+        agent.question_view = Some(crate::views::question_view::QuestionViewState::new(
+            "existing".into(),
+            vec![],
+            crate::views::prompt_widget::StashedPrompt::default(),
+        ));
         assert!(agent.question_view.is_some());
         // The user typed the restricted command into the composer.
         agent.prompt.set_text("/imagine a sunset");
@@ -1487,20 +1150,15 @@ fn restricted_command_with_open_modal_keeps_composer_text() {
         "composer text must be preserved for a later resubmit"
     );
     assert!(
-        matches!(
-            agent
-                .question_view
-                .as_ref()
-                .and_then(|qv| qv.local_kind.as_ref()),
-            Some(crate::views::question_view::LocalQuestionKind::CreditLimitUpsell { .. })
-        ),
-        "the pre-existing modal must survive (no second modal)"
+        agent.question_view.is_some(),
+        "the pre-existing modal must survive"
     );
     assert!(
         agent.session.pending_prompts.is_empty(),
         "nothing may be enqueued"
     );
 }
+// ZMY SELF-ADDED CODE END
 
 /// Regression: genuinely unknown (non-restricted) commands keep the PassThrough behavior shell/ACP commands rely on.
 #[test]
@@ -1596,11 +1254,13 @@ fn open_url_does_not_show_fallback_when_opener_succeeds() {
     let _ = std::fs::remove_file(&url_file);
 }
 
-/// Welcome has no scrollback: browser-unavailable OpenUrl must put up a single-line toast that includes the full URL.
-/// No `\n`; the welcome painter is one row. Privacy-banner Terms/Policy clicks hit this path.
+// ZMY SELF-ADDED CODE START
+/// Official privacy-banner links must not be opened or displayed on the welcome view.
+// ZMY SELF-ADDED CODE END
 #[serial_test::serial(GROK_TEST_OPEN_URL_FILE)]
+// ZMY SELF-ADDED CODE START
 #[test]
-fn open_url_welcome_toasts_single_line_url_when_browser_unavailable() {
+fn fork_official_privacy_links_are_not_opened_from_welcome() {
     let bad = std::env::temp_dir().join(format!(
         "grok-open-url-welcome-missing-{}/out.txt",
         std::process::id()
@@ -1614,8 +1274,6 @@ fn open_url_welcome_toasts_single_line_url_when_browser_unavailable() {
         "fixture must start on welcome"
     );
 
-    use crate::app::link_opener::browser_unavailable_line;
-
     let terms = crate::views::privacy_banner::PRIVACY_BANNER_TERMS_URL;
     let effects = dispatch(Action::OpenUrl(terms.to_string()), &mut app);
     assert!(effects.is_empty());
@@ -1624,16 +1282,9 @@ fn open_url_welcome_toasts_single_line_url_when_browser_unavailable() {
         .as_ref()
         .map(|(m, _)| m.as_str())
         .unwrap_or("");
-    // Structure only: clipboard delivery varies by host, so do not lock the exact "copied" phrase here (constructor unit tests cover both arms)
-    assert!(toast.starts_with(terms), "{toast}");
-    assert!(!toast.contains('\n'), "{toast}");
-    assert!(
-        toast == browser_unavailable_line(terms, true)
-            || toast == browser_unavailable_line(terms, false),
-        "welcome toast must match a delivery-honest line form: {toast}"
-    );
+    assert!(!toast.contains("grok.com"), "{toast}");
+    assert!(!bad.exists(), "official terms URL was opened");
 
-    // Policy URL is shorter than terms (compile-time constants); second toast replaces the first in welcome toast state
     let policy = crate::views::privacy_banner::PRIVACY_BANNER_POLICY_URL;
     let _ = dispatch(Action::OpenUrl(policy.to_string()), &mut app);
     let toast = app
@@ -1641,69 +1292,17 @@ fn open_url_welcome_toasts_single_line_url_when_browser_unavailable() {
         .as_ref()
         .map(|(m, _)| m.as_str())
         .unwrap_or("");
-    assert!(toast.starts_with(policy), "{toast}");
-    assert!(
-        toast == browser_unavailable_line(policy, true)
-            || toast == browser_unavailable_line(policy, false),
-        "second welcome toast must match a delivery-honest line form: {toast}"
-    );
+    assert!(!toast.contains("grok.com"), "{toast}");
+    assert!(!bad.exists(), "official privacy URL was opened");
 
     // SAFETY: serialized via `serial_test`; restore the env for other tests.
     unsafe { std::env::remove_var("GROK_TEST_OPEN_URL_FILE") };
 }
+// ZMY SELF-ADDED CODE END
 
-/// Credit-limit upsell Q&A submit routes through OpenUrl; when the browser is unavailable the full option URL must land in scrollback.
-#[serial_test::serial(GROK_TEST_OPEN_URL_FILE)]
-#[test]
-fn credit_limit_upsell_submit_shows_url_when_browser_unavailable() {
-    use crate::app::agent_view::translate_local_submit_for_test;
-    use crate::app::app_view::InputOutcome;
-    use crate::views::question_view::{LocalQuestionKind, QuestionSelection};
-
-    let bad = std::env::temp_dir().join(format!(
-        "grok-open-url-upsell-missing-{}/out.txt",
-        std::process::id()
-    ));
-    // SAFETY: serialized via `serial_test`.
-    unsafe { std::env::set_var("GROK_TEST_OPEN_URL_FILE", &bad) };
-
-    let mut app = test_app_with_agent();
-    open_upsell_qa(&mut app, CreditLimitUpsellMode::UnifiedCredits);
-    let mut qv = app
-        .agents
-        .get_mut(&AgentId(0))
-        .unwrap()
-        .question_view
-        .take()
-        .expect("expected credit-limit upsell modal");
-    // Select option 1, "Buy more credits" (credits / usage URL)
-    set_first_selection(&mut qv, QuestionSelection::Single(Some(1)));
-    let kind = LocalQuestionKind::CreditLimitUpsell {
-        choices: vec![
-            xai_grok_telemetry::events::CreditLimitChoice::UpgradeTier,
-            xai_grok_telemetry::events::CreditLimitChoice::PurchaseCredits,
-            xai_grok_telemetry::events::CreditLimitChoice::RetryLastPrompt,
-        ],
-    };
-    let InputOutcome::Action(Action::OpenUrl(url)) =
-        translate_local_submit_for_test(&qv, kind, false)
-    else {
-        panic!("expected OpenUrl from upsell submit");
-    };
-    assert_eq!(url, UPSELL_URL_PAYG);
-
-    let before = agent_scrollback_len(&app);
-    let _ = dispatch(Action::OpenUrl(url.clone()), &mut app);
-    let text = last_system_text(&app, AgentId(0));
-    assert_eq!(agent_scrollback_len(&app), before + 1);
-    assert!(
-        text.contains(&url),
-        "upsell URL missing from fallback: {text}"
-    );
-
-    // SAFETY: serialized via `serial_test`.
-    unsafe { std::env::remove_var("GROK_TEST_OPEN_URL_FILE") };
-}
+// ZMY SELF-ADDED CODE START
+// Removed the official billing-modal URL test and its serialization attribute; provider-neutral guidance is covered by fork regressions.
+// ZMY SELF-ADDED CODE END
 
 #[test]
 fn billing_fetched_clears_usage_modal_loading() {

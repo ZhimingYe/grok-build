@@ -2619,6 +2619,28 @@ mod tests {
         headers.get(name).and_then(|v| v.to_str().ok())
     }
 
+    // ZMY SELF-ADDED CODE START
+    #[tokio::test]
+    async fn fork_nonofficial_api_key_sampling_succeeds_against_local_mock() {
+        let (headers, body) = capture_request(
+            ApiBackend::Responses,
+            false,
+            RequestCompression::None,
+            "local-provider-inference",
+        )
+        .await;
+        assert_eq!(
+            Some("Bearer test-key"),
+            header(&headers, HeaderName::from_static("authorization"))
+        );
+        assert!(
+            std::str::from_utf8(&body)
+                .unwrap()
+                .contains("local-provider-inference")
+        );
+    }
+    // ZMY SELF-ADDED CODE END
+
     #[tokio::test]
     async fn every_chat_route_compresses_large_bodies_when_configured() {
         let input = large_input();

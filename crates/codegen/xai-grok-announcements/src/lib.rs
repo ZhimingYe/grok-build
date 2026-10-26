@@ -395,6 +395,9 @@ mod tests {
             message: Some("   ".into()),
             ..Default::default()
         };
-        assert_eq!(visible_announcements(&[a1, a2, a3]).len(), 1);
+        // ZMY SELF-ADDED CODE START
+        // No upstream announcement content is shown, even when a message is populated.
+        assert!(visible_announcements(&[a1, a2, a3]).is_empty());
+        // ZMY SELF-ADDED CODE END
     }
 }

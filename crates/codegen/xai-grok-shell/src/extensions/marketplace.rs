@@ -1252,36 +1252,28 @@ mod official_source_tests {
         );
     }
 
+    // ZMY SELF-ADDED CODE START
+    /// Policy changes cannot enable automatic registration of the official source.
     #[test]
-    fn first_run_creates_source_and_sets_flag() {
+    fn first_run_does_not_register_official_source() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
 
         ensure_official_marketplace_source(home);
 
         let config_path = home.join("config.toml");
-        assert!(config_path.exists(), "config.toml should be created");
-
-        let sources = read_sources(&config_path);
-        assert_eq!(sources.len(), 1);
-        let Some(source) = sources.first() else {
-            panic!("expected one source: {sources:?}");
-        };
-        assert_eq!(
-            source.name,
-            xai_grok_plugin_marketplace::OFFICIAL_SOURCE_NAME
+        assert!(
+            !config_path.exists(),
+            "startup must not create marketplace config"
         );
-        assert!(matches!(
-            &source.kind,
-            xai_grok_plugin_marketplace::SourceKind::Git { url, .. }
-                if url == xai_grok_plugin_marketplace::OFFICIAL_SOURCE_GIT_URL
-        ));
-        assert!(read_flag(&config_path));
+        assert!(read_sources(&config_path).is_empty());
+        assert!(!read_flag(&config_path));
     }
+    // ZMY SELF-ADDED CODE END
 
-    /// A marketplace policy blocking the official URL skips the auto-register AND leaves the sticky flag unset.
+    // ZMY SELF-ADDED CODE START
     #[test]
-    fn policy_blocked_first_run_skips_register_and_retries_after_lift() {
+    fn policy_lift_does_not_enable_official_auto_registration() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
         let config_path = home.join("config.toml");
@@ -1296,7 +1288,7 @@ mod official_source_tests {
         );
         assert!(
             !read_flag(&config_path),
-            "flag must stay unset so a lifted policy retries"
+            "startup must not persist an auto-registration flag"
         );
 
         ensure_official_marketplace_source_with(
@@ -1305,39 +1297,40 @@ mod official_source_tests {
         );
         assert_eq!(
             read_sources(&config_path).len(),
-            1,
-            "lifted policy registers"
+            0,
+            "a lifted policy must not restore the official source"
         );
-        assert!(read_flag(&config_path));
+        assert!(!read_flag(&config_path));
     }
+    // ZMY SELF-ADDED CODE END
 
+    // ZMY SELF-ADDED CODE START
     #[test]
-    fn second_run_is_noop() {
+    fn startup_does_not_modify_custom_marketplace_config() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
+        let config_path = home.join("config.toml");
+        let content =
+            "# custom source\n[[marketplace.sources]]\nname = \"Local\"\npath = \"/tmp/mine\"\n";
+        std::fs::write(&config_path, content).unwrap();
 
         ensure_official_marketplace_source(home);
-        let after_first = std::fs::read_to_string(home.join("config.toml")).unwrap();
-
+        let after_first = std::fs::read_to_string(&config_path).unwrap();
         ensure_official_marketplace_source(home);
-        let after_second = std::fs::read_to_string(home.join("config.toml")).unwrap();
+        let after_second = std::fs::read_to_string(&config_path).unwrap();
 
-        assert_eq!(
-            after_first, after_second,
-            "second run must not modify config"
-        );
+        assert_eq!(after_first, content);
+        assert_eq!(after_second, content);
     }
+    // ZMY SELF-ADDED CODE END
 
+    // ZMY SELF-ADDED CODE START
     #[test]
     fn removed_source_stays_removed_across_restarts() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
         let config_path = home.join("config.toml");
 
-        ensure_official_marketplace_source(home);
-        assert_eq!(read_sources(&config_path).len(), 1);
-
-        // Simulate removal: drop the source block, keep the flag.
         std::fs::write(
             &config_path,
             "[marketplace]\nofficial_marketplace_auto_installed = true\n",
@@ -1352,33 +1345,33 @@ mod official_source_tests {
         );
         assert!(read_flag(&config_path));
     }
+    // ZMY SELF-ADDED CODE END
 
+    // ZMY SELF-ADDED CODE START
     #[test]
-    fn pre_existing_official_source_just_sets_flag() {
+    fn legacy_official_source_config_is_not_rewritten() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
         let config_path = home.join("config.toml");
 
-        // User added the official source manually (flag not set).
-        std::fs::write(
-            &config_path,
-            format!(
-                "[[marketplace.sources]]\nname = \"{}\"\ngit = \"{}\"\n",
-                xai_grok_plugin_marketplace::OFFICIAL_SOURCE_NAME,
-                xai_grok_plugin_marketplace::OFFICIAL_SOURCE_GIT_URL,
-            ),
-        )
-        .unwrap();
+        let content = format!(
+            "[[marketplace.sources]]\nname = \"{}\"\ngit = \"{}\"\n",
+            xai_grok_plugin_marketplace::OFFICIAL_SOURCE_NAME,
+            xai_grok_plugin_marketplace::OFFICIAL_SOURCE_GIT_URL,
+        );
+        std::fs::write(&config_path, &content).unwrap();
 
         ensure_official_marketplace_source(home);
 
-        let sources = read_sources(&config_path);
-        assert_eq!(sources.len(), 1, "must not duplicate existing source");
-        assert!(read_flag(&config_path));
+        assert_eq!(std::fs::read_to_string(&config_path).unwrap(), content);
+        assert_eq!(read_sources(&config_path).len(), 1);
+        assert!(!read_flag(&config_path));
     }
+    // ZMY SELF-ADDED CODE END
 
+    // ZMY SELF-ADDED CODE START
     #[test]
-    fn pre_existing_official_source_in_known_marketplaces_skips_append() {
+    fn legacy_official_source_in_known_marketplaces_does_not_create_config() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
         let plugins_dir = home.join("plugins");
@@ -1399,14 +1392,14 @@ mod official_source_tests {
             read_sources(&config_path).is_empty(),
             "must not append to config.toml when the source is already present in known_marketplaces.json"
         );
-        assert!(
-            read_flag(&config_path),
-            "must set the auto-installed flag so subsequent restarts skip the append check"
-        );
+        assert!(!config_path.exists());
+        assert!(!read_flag(&config_path));
     }
+    // ZMY SELF-ADDED CODE END
 
+    // ZMY SELF-ADDED CODE START
     #[test]
-    fn pre_existing_official_source_in_extra_known_marketplaces_skips_append() {
+    fn legacy_official_source_in_extra_marketplaces_does_not_create_config() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
         std::fs::write(
@@ -1425,11 +1418,14 @@ mod official_source_tests {
             read_sources(&config_path).is_empty(),
             "must not append to config.toml when source is in extraKnownMarketplaces"
         );
-        assert!(read_flag(&config_path));
+        assert!(!config_path.exists());
+        assert!(!read_flag(&config_path));
     }
+    // ZMY SELF-ADDED CODE END
 
+    // ZMY SELF-ADDED CODE START
     #[test]
-    fn pre_existing_official_source_with_branch_just_sets_flag() {
+    fn legacy_official_source_branch_is_not_rewritten() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
         let config_path = home.join("config.toml");
@@ -1453,11 +1449,13 @@ mod official_source_tests {
             std::fs::read_to_string(&config_path)
                 .unwrap()
                 .contains("branch = \"some-branch\""),
-            "branch override must survive registration"
+            "existing branch override must be preserved"
         );
-        assert!(read_flag(&config_path));
+        assert!(!read_flag(&config_path));
     }
+    // ZMY SELF-ADDED CODE END
 
+    // ZMY SELF-ADDED CODE START
     #[test]
     fn preserves_existing_user_sources_and_comments() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1478,9 +1476,10 @@ mod official_source_tests {
         );
         assert!(after.contains("Local"), "existing source preserved");
         let sources = read_sources(&config_path);
-        assert_eq!(sources.len(), 2);
-        assert!(read_flag(&config_path));
+        assert_eq!(sources.len(), 1);
+        assert!(!read_flag(&config_path));
     }
+    // ZMY SELF-ADDED CODE END
 }
 
 #[cfg(test)]

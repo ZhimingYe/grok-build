@@ -51,9 +51,6 @@ xai-grok-config = { workspace = true }
 xai-dirs = { workspace = true }
 # Leaf config value types (RemoteSettings, BoolFlag) for the folder-trust decision.
 xai-grok-config-types = { workspace = true }
-# ZMY SELF-ADDED CODE START
-xai-grok-env = { workspace = true }
-# ZMY SELF-ADDED CODE END
 toml = { workspace = true, features = ["preserve_order"] }
 toml_edit = { workspace = true }
 dashmap = { workspace = true }
@@ -76,9 +73,7 @@ smallvec = { workspace = true }
 chrono = { workspace = true }
 tree-sitter = { workspace = true }
 url = { workspace = true }
-# ZMY SELF-ADDED CODE START
-# Removed a duplicate xai-grok-env dependency declaration.
-# ZMY SELF-ADDED CODE END
+xai-grok-env = { workspace = true }
 humantime-serde = { workspace = true }
 prometheus = { workspace = true }
 xai-grok-egress-proxy = { path = "../xai-grok-egress-proxy" }

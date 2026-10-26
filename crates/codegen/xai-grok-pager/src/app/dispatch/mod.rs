@@ -36,9 +36,11 @@ mod turn;
 mod voice;
 pub(crate) use auth::scrollback_has_recent_disk_full;
 pub(in crate::app) use auth::scrollback_has_recent_error_banner;
-pub(crate) use billing::{
-    CREDIT_LIMIT_RETRY_OPTION_ID, UPSELL_URL_PAYG, UPSELL_URL_UPGRADE, is_credit_limit_error,
-};
+// ZMY SELF-ADDED CODE START
+pub(crate) use billing::{CREDIT_LIMIT_RETRY_OPTION_ID, is_credit_limit_error};
+#[cfg(test)]
+pub(crate) use billing::{UPSELL_URL_PAYG, UPSELL_URL_UPGRADE};
+// ZMY SELF-ADDED CODE END
 #[cfg(test)]
 pub(crate) use ctx::{SwitchCause, switch_to_agent};
 pub(crate) use dashboard::{DashboardStopReadiness, dashboard_stop_readiness};

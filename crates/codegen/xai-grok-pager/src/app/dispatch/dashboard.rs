@@ -1173,10 +1173,11 @@ pub(super) fn dispatch_dashboard_dispatch_slash(app: &mut AppView, text: String)
             let token = invocation.token.to_string();
             if let Some(d) = app.dashboard.as_mut() {
                 d.dispatch.set_text("");
+                // ZMY SELF-ADDED CODE START
                 d.set_error_toast(&format!(
-                    "/{token} requires SuperGrok: upgrade at {}",
-                    super::billing::UPSELL_URL_UPGRADE
+                    "/{token} is unavailable with the configured provider. Choose a provider or model that supports it."
                 ));
+                // ZMY SELF-ADDED CODE END
             }
             return vec![];
         }

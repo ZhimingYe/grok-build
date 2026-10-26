@@ -42,10 +42,13 @@ pub use xai_grok_tools_api::slash_commands::{
     IMAGE_GEN_TOOL_NAME, IMAGINE_COMMAND_NAME, imagine_instruction, imagine_usage_message,
 };
 
-/// Prose returned to the model (as a normal, successful tool result) when a free / X Basic user calls `image_gen` or
-/// `image_edit`. The model relays it to the user. The deliberate `/imagine` slash command shows the richer SuperGrok
-/// upsell modal instead; this covers the natural-language path.
-pub(crate) const TIER_RESTRICTED_UPSELL: &str = "Image generation is a SuperGrok feature and isn't available on the free or X Basic tier. Let the user know they can unlock image and video generation by upgrading to SuperGrok: https://grok.com/supergrok?referrer=grok-build. Do not retry this tool.";
+// ZMY SELF-ADDED CODE START
+/// Provider-neutral availability guidance returned as a normal, successful tool result when image generation is unavailable.
+// ZMY SELF-ADDED CODE END
+// ZMY SELF-ADDED CODE START
+// Replaces official subscription promotion with provider-neutral availability guidance.
+pub(crate) const TIER_RESTRICTED_UPSELL: &str = "Image generation is unavailable at the configured provider. Configure a provider that supports image generation.";
+// ZMY SELF-ADDED CODE END
 
 /// HTTP client for xAI Imagine API. Cloned per-request; shares `Arc` state.
 #[derive(Clone)]
@@ -63,9 +66,9 @@ pub struct ImageGenClient {
     /// Imagine API emits an `auth_401_attribution` event with
     /// `consumer == "ImageGen"` for unified auth-failure telemetry.
     attribution_callback: Option<SharedAttributionCallback>,
-    /// When `true`, the user is on a tier the Imagine server zero-limits (free / X Basic).
-    /// `image_gen` / `image_edit` short-circuit before any HTTP call and return the SuperGrok
-    /// upsell prose instead. See [`ImageGenClient::is_tier_restricted`].
+    // ZMY SELF-ADDED CODE START
+    /// When `true`, image tools short-circuit before HTTP and return provider-neutral availability guidance.
+    // ZMY SELF-ADDED CODE END
     tier_restricted: bool,
     /// Per-request [`SESSION_ID_HEADER`]; kept off `default_headers` so the
     /// transport stays session-independent and cacheable.
@@ -170,9 +173,9 @@ impl ImageGenClient {
         self
     }
 
-    /// Whether the current user's tier (free / X Basic) is zero-limited on
-    /// Imagine server-side. `image_gen` / `image_edit` use this to short-circuit
-    /// with the SuperGrok upsell instead of issuing a doomed request.
+    // ZMY SELF-ADDED CODE START
+    /// Whether the current user's tier is zero-limited on the Imagine server; restricted calls return availability guidance.
+    // ZMY SELF-ADDED CODE END
     pub(crate) fn is_tier_restricted(&self) -> bool {
         self.tier_restricted
     }
@@ -327,9 +330,9 @@ pub enum ImageGenConfig {
         /// the remote `image_gen_model_override` config flag. `image_edit` is unaffected.
         model_override: Option<String>,
         edit_model_override: Option<String>,
-        /// `true` when the user is on a tier the Imagine server zero-limits (free / X Basic). The tools stay advertised to the
-        /// model, but `image_gen` / `image_edit` short-circuit at call time with the SuperGrok upsell prose instead of a doomed
-        /// request. Set by the host from the subscription tier; always `false` for team / API-key / workspace callers.
+        // ZMY SELF-ADDED CODE START
+        /// `true` when image tools are unavailable to the selected tier; restricted calls return neutral guidance instead of a request.
+        // ZMY SELF-ADDED CODE END
         tier_restricted: bool,
     },
 }
@@ -703,12 +706,18 @@ mod tests {
 
     #[tokio::test]
     async fn tier_restricted_short_circuits_with_upsell() {
-        // A free / X Basic user's image_gen call returns the SuperGrok upsell prose as a normal
-        // result (no HTTP, no error card) so the model can relay it. Only the client is inserted —
+        // ZMY SELF-ADDED CODE START
+        // A restricted image_gen call returns provider-neutral guidance as a normal result (no HTTP, no error card).
+        // ZMY SELF-ADDED CODE END
+        // ZMY SELF-ADDED CODE START
+        // Only the client is inserted —
         // the short-circuit returns before any other resource (e.g. SessionFolder) is required.
+        // ZMY SELF-ADDED CODE END
         let cfg = ImageGenConfig::Enabled {
             api_key: Some("k".into()),
-            base_url: "https://api.x.ai/v1".into(),
+            // ZMY SELF-ADDED CODE START
+            base_url: "https://provider.example/v1".into(),
+            // ZMY SELF-ADDED CODE END
             extra_headers: indexmap::IndexMap::new(),
             image_gen_enabled: true,
             image_edit_enabled: true,
@@ -728,14 +737,25 @@ mod tests {
             },
         )
         .await
-        .expect("tier-restricted call must succeed with upsell prose");
+        // ZMY SELF-ADDED CODE START
+        .expect("tier-restricted call must succeed with provider guidance");
+        // ZMY SELF-ADDED CODE END
 
         match result {
             ToolOutput::Text(t) => {
-                assert!(t.text.contains("SuperGrok"), "got: {}", t.text);
-                assert!(t.text.contains("supergrok?referrer=grok-build"));
+                // ZMY SELF-ADDED CODE START
+                // Replaces the official upgrade-link assertion with neutral availability guidance.
+                assert!(
+                    t.text.contains("unavailable at the configured provider"),
+                    "got: {}",
+                    t.text
+                );
+                assert!(!t.text.contains("grok.com"));
+                // ZMY SELF-ADDED CODE END
             }
-            other => panic!("expected Text upsell, got {other:?}"),
+            // ZMY SELF-ADDED CODE START
+            other => panic!("expected provider-neutral text, got {other:?}"),
+            // ZMY SELF-ADDED CODE END
         }
     }
 }

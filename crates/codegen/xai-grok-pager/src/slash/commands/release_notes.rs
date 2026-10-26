@@ -1,5 +1,8 @@
 use crate::slash::command::{CommandExecCtx, CommandResult, SlashCommand, slash_meta};
 
+// ZMY SELF-ADDED CODE START
+// Removed the Action import because release notes no longer fetch or display upstream content.
+// ZMY SELF-ADDED CODE END
 pub struct ReleaseNotesCommand;
 
 impl SlashCommand for ReleaseNotesCommand {

@@ -144,8 +144,9 @@ pub fn builtin_commands() -> Vec<Arc<dyn SlashCommand>> {
         Arc::new(imagine::ImagineCommand),
         Arc::new(imagine_video::ImagineVideoCommand),
         // ZMY SELF-ADDED CODE START
-        // Official docs, release notes, announcements, feedback and privacy links are not offered in this fork.
-        // Account and one-off maintenance.
+        // Official docs, release notes, announcements and feedback are not offered in this fork.
+        // Account and local settings commands.
+        Arc::new(privacy::PrivacyCommand),
         // ZMY SELF-ADDED CODE END
         Arc::new(doctor::DoctorCommand),
         Arc::new(import_claude::ImportClaudeCommand),
