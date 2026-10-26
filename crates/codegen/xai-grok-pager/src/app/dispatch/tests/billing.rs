@@ -172,17 +172,42 @@ fn credit_limit_recheck_keeps_stash_when_showing_neutral_notice() {
         }),
         &mut app,
     );
+    {
+        let agent = app.agents.get_mut(&AgentId(0)).unwrap();
+        let state = agent.question_view.as_mut().expect("retry question");
+        assert_eq!(state.questions.len(), 1);
+        assert_eq!(state.questions[0].options.len(), 1);
+        assert_eq!(state.questions[0].options[0].label, "Try Again");
+        assert_eq!(
+            state.questions[0].options[0].id.as_deref(),
+            Some(CREDIT_LIMIT_RETRY_OPTION_ID)
+        );
+        assert!(state.questions[0].question.contains("configured provider"));
+        state.selections[0] = crate::views::question_view::QuestionSelection::Single(Some(0));
+    }
+    let action = {
+        let agent = app.agents.get(&AgentId(0)).unwrap();
+        let state = agent.question_view.as_ref().unwrap();
+        match crate::app::agent_view::translate_local_submit_for_test(
+            state,
+            crate::views::question_view::LocalQuestionKind::CreditLimitUpsell { choices: vec![] },
+            false,
+        ) {
+            crate::app::app_view::InputOutcome::Action(action) => action,
+            other => panic!("expected retry action, got {other:?}"),
+        }
+    };
+    let effects = dispatch(action, &mut app);
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::SendPrompt { text, .. } if text == "retry me"
+    )));
     let agent = app.agents.get(&AgentId(0)).unwrap();
-    assert!(agent.question_view.is_none());
-    assert!(
-        agent
-            .toast
-            .as_ref()
-            .is_some_and(|(message, _)| message.contains("configured provider"))
-    );
+    assert!(agent.credit_limit_stashed_prompt.is_none());
     assert_eq!(
         agent
-            .credit_limit_stashed_prompt
+            .session
+            .in_flight_prompt
             .as_ref()
             .map(|p| p.text.as_str()),
         Some("retry me")

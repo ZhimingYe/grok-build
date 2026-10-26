@@ -100,7 +100,32 @@ pub(super) fn open_credit_limit_upsell(
             "The configured provider reports that its spending limit was reached. Check its usage settings or configure another provider."
         }
     };
-    agent.show_toast(message);
+    if agent.credit_limit_stashed_prompt.is_some() && agent.question_view.is_none() {
+        let question = crate::views::question_view::Question {
+            question: message.into(),
+            id: None,
+            options: vec![crate::views::question_view::QuestionOption {
+                label: "Try Again".into(),
+                description: "Retry the previous prompt".into(),
+                preview: None,
+                id: Some(CREDIT_LIMIT_RETRY_OPTION_ID.into()),
+            }],
+            multi_select: Some(false),
+        };
+        let state = crate::views::question_view::QuestionViewState::new(
+            format!("credit-limit-{}", uuid::Uuid::new_v4()),
+            vec![question],
+            agent.prompt.stash(),
+        )
+        .with_local_kind(
+            crate::views::question_view::LocalQuestionKind::CreditLimitUpsell { choices: vec![] },
+        )
+        .with_no_freeform();
+        agent.install_local_question(state);
+        agent.prompt.set_text("");
+    } else {
+        agent.show_toast(message);
+    }
     // ZMY SELF-ADDED CODE END
 }
 

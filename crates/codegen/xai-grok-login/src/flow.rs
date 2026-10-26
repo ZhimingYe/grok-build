@@ -467,8 +467,9 @@ pub(super) async fn run_auth_flow_steps(
         "auth: starting auth flow"
     );
     // ZMY SELF-ADDED CODE START
-    if !reauth && let Some(error) = auth_manager.cached_official_auth_error() {
-        return Err(error.into());
+    let blocked_official_auth = !reauth && auth_manager.cached_official_auth_error().is_some();
+    if blocked_official_auth {
+        refuse_default_official_login(grok_com_config)?;
     }
     // ZMY SELF-ADDED CODE END
     if reauth {
@@ -495,7 +496,8 @@ pub(super) async fn run_auth_flow_steps(
             tracing::warn!(error = ?e, "auth: failed to remove legacy scope entry (non-fatal)");
         }
     }
-    if !force_interactive && !reauth && auth_manager.is_expired() {
+    // ZMY SELF-ADDED CODE START
+    if !force_interactive && !reauth && !blocked_official_auth && auth_manager.is_expired() {
         let file_lock = auth_manager
             .try_lock_auth_file_async(
                 crate::manager::AUTH_LOCK_TIMEOUT,
@@ -560,6 +562,7 @@ pub(super) async fn run_auth_flow_steps(
             }
         }
     }
+    // ZMY SELF-ADDED CODE END
     if let Some(ref cmd) = grok_com_config.auth_provider_command {
         let over_stale_credential = reauth || auth_manager.is_expired();
         match run_external_auth_provider(cmd, auth_manager, over_stale_credential, on_stderr).await
@@ -1658,6 +1661,140 @@ mod tests {
             &pinned_cfg("team-good")
         ));
     }
+    // ZMY SELF-ADDED CODE START
+    fn write_auth_fixture(dir: &Path, config: &GrokComConfig, auth: &GrokAuth) {
+        let store = serde_json::json!({ config.auth_scope(): auth });
+        std::fs::write(
+            dir.join("auth.json"),
+            serde_json::to_vec(&store).expect("serialize auth fixture"),
+        )
+        .expect("write auth fixture");
+    }
+
+    #[tokio::test]
+    async fn fork_external_provider_replaces_blocked_official_cache() {
+        for expired in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let cfg = GrokComConfig {
+                auth_provider_command: Some("printf '%s' external-token".into()),
+                ..GrokComConfig::default()
+            };
+            let cached = GrokAuth {
+                key: if expired {
+                    "expired-official-token".into()
+                } else {
+                    "valid-official-token".into()
+                },
+                auth_mode: AuthMode::Oidc,
+                expires_at: Some(
+                    Utc::now()
+                        + if expired {
+                            chrono::Duration::hours(-1)
+                        } else {
+                            chrono::Duration::hours(1)
+                        },
+                ),
+                oidc_issuer: Some(XAI_OAUTH2_ISSUER.into()),
+                ..GrokAuth::test_default()
+            };
+            write_auth_fixture(dir.path(), &cfg, &cached);
+            let mgr = Arc::new(
+                AuthManager::new(dir.path(), cfg.clone()).with_proxy_base_url(&dead_proxy_url()),
+            );
+            if expired {
+                let valid_disk = GrokAuth {
+                    key: "valid-official-disk-token".into(),
+                    auth_mode: AuthMode::Oidc,
+                    expires_at: Some(Utc::now() + chrono::Duration::hours(1)),
+                    oidc_issuer: Some(XAI_OAUTH2_ISSUER.into()),
+                    ..GrokAuth::test_default()
+                };
+                write_auth_fixture(dir.path(), &cfg, &valid_disk);
+            }
+
+            let (auth, did_login) = run_auth_flow(
+                &mgr,
+                &cfg,
+                None,
+                false,
+                None,
+                None,
+                None,
+                LoginTransportOverride::None,
+            )
+            .await
+            .expect("configured external provider should replace blocked cache");
+            assert!(did_login);
+            assert_eq!(auth.key, "external-token");
+            assert_eq!(auth.auth_mode, AuthMode::External);
+            assert_eq!(
+                mgr.read_disk_auth().as_ref().map(|auth| &auth.key),
+                Some(&"external-token".to_string())
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn fork_failed_provider_and_default_login_preserve_blocked_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = GrokComConfig {
+            auth_provider_command: Some("false".into()),
+            ..GrokComConfig::default()
+        };
+        let cached = GrokAuth {
+            key: "untouched-official-token".into(),
+            auth_mode: AuthMode::Oidc,
+            expires_at: Some(Utc::now() + chrono::Duration::hours(1)),
+            oidc_issuer: Some(XAI_OAUTH2_ISSUER.into()),
+            ..GrokAuth::test_default()
+        };
+        write_auth_fixture(dir.path(), &cfg, &cached);
+        let mgr = Arc::new(
+            AuthManager::new(dir.path(), cfg.clone()).with_proxy_base_url(&dead_proxy_url()),
+        );
+        assert!(
+            run_auth_flow(
+                &mgr,
+                &cfg,
+                None,
+                false,
+                None,
+                None,
+                None,
+                LoginTransportOverride::None,
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(
+            mgr.read_disk_auth().as_ref().map(|auth| &auth.key),
+            Some(&"untouched-official-token".to_string())
+        );
+
+        let default_dir = tempfile::tempdir().unwrap();
+        let default_cfg = GrokComConfig::default();
+        write_auth_fixture(default_dir.path(), &default_cfg, &cached);
+        let default_mgr = Arc::new(AuthManager::new(default_dir.path(), default_cfg.clone()));
+        assert!(
+            run_auth_flow(
+                &default_mgr,
+                &default_cfg,
+                None,
+                false,
+                None,
+                None,
+                None,
+                LoginTransportOverride::None,
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(
+            default_mgr.read_disk_auth().as_ref().map(|auth| &auth.key),
+            Some(&"untouched-official-token".to_string())
+        );
+    }
+    // ZMY SELF-ADDED CODE END
     /// When the in-memory token is expired but disk has a valid token, run_auth_flow should return the disk token without interactive login.
     #[tokio::test]
     async fn run_auth_flow_uses_valid_disk_token_when_expired() {
