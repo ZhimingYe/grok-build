@@ -151,9 +151,9 @@ pub struct VideoGenClient {
     /// an `auth_401_attribution` event with `consumer` of `"VideoGen.start"` (start request) or
     /// `"VideoGen.poll"` (poll request) for unified auth-failure telemetry.
     attribution_callback: Option<SharedAttributionCallback>,
-    /// When `true`, the user is on a tier the Imagine server zero-limits
-    /// (free / X Basic). The video tools short-circuit before any HTTP call
-    /// and return the SuperGrok upsell prose. See [`VideoGenClient::is_tier_restricted`].
+    // ZMY SELF-ADDED CODE START
+    /// When `true`, video tools short-circuit before HTTP and return provider-neutral availability guidance.
+    // ZMY SELF-ADDED CODE END
     tier_restricted: bool,
     /// See [`VideoGenConfig::Enabled`]'s `zdr_restricted`.
     zdr_restricted: bool,
@@ -181,6 +181,13 @@ impl VideoGenClient {
                 "Cannot create VideoGenClient from disabled config",
             ));
         };
+        // ZMY SELF-ADDED CODE START
+        if xai_grok_env::is_official_service_url(base_url) {
+            return Err(xai_tool_runtime::ToolError::invalid_arguments(
+                xai_grok_env::OFFICIAL_SERVICES_DISABLED,
+            ));
+        }
+        // ZMY SELF-ADDED CODE END
 
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
@@ -279,9 +286,9 @@ impl VideoGenClient {
         self
     }
 
-    /// Whether the current user's tier (free / X Basic) is zero-limited on
-    /// Imagine server-side. The video tools use this to short-circuit with the
-    /// SuperGrok upsell instead of issuing a doomed request.
+    // ZMY SELF-ADDED CODE START
+    /// Whether the current user's tier is zero-limited on the Imagine server; restricted calls return availability guidance.
+    // ZMY SELF-ADDED CODE END
     pub(crate) fn is_tier_restricted(&self) -> bool {
         self.tier_restricted
     }
@@ -517,6 +524,13 @@ impl VideoGenClient {
 
     /// Download video bytes from a pre-signed temporary URL (no auth headers).
     async fn download_video(&self, url: &str) -> Result<Vec<u8>, xai_tool_runtime::ToolError> {
+        // ZMY SELF-ADDED CODE START
+        if xai_grok_env::is_official_service_url(url) {
+            return Err(xai_tool_runtime::ToolError::invalid_arguments(
+                xai_grok_env::OFFICIAL_SERVICES_DISABLED,
+            ));
+        }
+        // ZMY SELF-ADDED CODE END
         let response = self.download_http.get(url).send().await.map_err(|e| {
             xai_tool_runtime::ToolError::invalid_arguments(format!("Failed to download video: {e}"))
         })?;
@@ -740,9 +754,9 @@ pub enum VideoGenConfig {
         base_url: String,
         extra_headers: indexmap::IndexMap<String, String>,
         zdr_video_output_s3: Option<Box<ZdrVideoOutputS3Config>>,
-        /// `true` when the user is on a tier the Imagine server zero-limits (free / X Basic). The video tools stay advertised
-        /// but short-circuit at call time with the SuperGrok upsell prose. Set by the host from the subscription tier; always
-        /// `false` for team / API-key / workspace.
+        // ZMY SELF-ADDED CODE START
+        /// `true` when video tools are unavailable to the selected tier; restricted calls return neutral guidance instead of a request.
+        // ZMY SELF-ADDED CODE END
         tier_restricted: bool,
         /// `true` when `tools.disable_zdr_incompatible_tools` is set with no valid
         /// `[tools.zdr_video_output_s3]` bucket. The video tools stay advertised but fail at call
@@ -757,10 +771,13 @@ impl VideoGenConfig {
     }
 }
 
-/// Prose returned to the model (as a normal, successful tool result) when a free / X Basic user
-/// calls a video tool. The model relays it to the user; the deliberate `/imagine-video` slash
-/// command shows the SuperGrok upsell modal instead.
-pub(crate) const TIER_RESTRICTED_UPSELL: &str = "Video generation is a SuperGrok feature and isn't available on the free or X Basic tier. Let the user know they can unlock image and video generation by upgrading to SuperGrok: https://grok.com/supergrok?referrer=grok-build. Do not retry this tool.";
+// ZMY SELF-ADDED CODE START
+/// Provider-neutral availability guidance returned as a normal, successful tool result when video generation is unavailable.
+// ZMY SELF-ADDED CODE END
+// ZMY SELF-ADDED CODE START
+// Replaces official subscription promotion with provider-neutral availability guidance.
+pub(crate) const TIER_RESTRICTED_UPSELL: &str = "Video generation is unavailable at the configured provider. Configure a provider that supports video generation.";
+// ZMY SELF-ADDED CODE END
 
 /// Error for video tool calls in a ZDR session with no output bucket.
 /// A verbatim tool *error* (unlike the [`TIER_RESTRICTED_UPSELL`] prose):
@@ -1444,7 +1461,9 @@ mod tests {
     async fn request_attaches_session_and_bearer_headers() {
         let cfg = VideoGenConfig::Enabled {
             api_key: Some("k".into()),
-            base_url: "https://api.x.ai/v1".into(),
+            // ZMY SELF-ADDED CODE START
+            base_url: "https://provider.example/v1".into(),
+            // ZMY SELF-ADDED CODE END
             extra_headers: indexmap::IndexMap::new(),
             zdr_video_output_s3: None,
             tier_restricted: false,
@@ -1454,7 +1473,13 @@ mod tests {
             .unwrap()
             .with_session_id("sess-7");
         let req = client
-            .request(reqwest::Method::POST, "https://api.x.ai/v1/videos", "tok")
+            // ZMY SELF-ADDED CODE START
+            .request(
+                reqwest::Method::POST,
+                "https://provider.example/v1/videos",
+                "tok",
+            )
+            // ZMY SELF-ADDED CODE END
             .build()
             .unwrap();
         assert_eq!(

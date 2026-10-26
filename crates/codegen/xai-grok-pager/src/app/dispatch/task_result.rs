@@ -999,9 +999,11 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             vec![]
         }
         TaskResult::ChangelogFetched { markdown, entries } => {
-            app.changelog_markdown = markdown;
-            app.changelog_bullets =
-                xai_grok_shell::util::changelog::bullets_from_entries(&entries, 3);
+            // ZMY SELF-ADDED CODE START
+            let _ = (markdown, entries);
+            app.changelog_markdown = None;
+            app.changelog_bullets.clear();
+            // ZMY SELF-ADDED CODE END
             vec![]
         }
         TaskResult::ClipboardAttachmentProbed {

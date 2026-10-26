@@ -326,6 +326,13 @@ async fn relay_sync_task(
         }
     };
 
+    // ZMY SELF-ADDED CODE START
+    if !xai_grok_config::Distribution::current().allows(xai_grok_config::Capability::RemoteControl)
+    {
+        update_state(ConnectionState::Disconnected);
+        return;
+    }
+    // ZMY SELF-ADDED CODE END
     update_state(ConnectionState::Connecting);
 
     let (from_relay_tx, mut from_relay_rx) = mpsc::unbounded_channel::<String>();

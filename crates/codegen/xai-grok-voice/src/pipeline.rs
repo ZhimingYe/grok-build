@@ -140,6 +140,19 @@ pub async fn run_voice_pipeline(
     mut cmd_rx: mpsc::Receiver<VoiceCommand>,
     event_tx: mpsc::Sender<TaggedVoiceEvent>,
 ) {
+    // ZMY SELF-ADDED CODE START
+    if !xai_grok_config::Distribution::current().allows(xai_grok_config::Capability::Voice) {
+        tracing::debug!("voice dictation is disabled in this fork");
+        return;
+    }
+    if config
+        .stt_ws_url()
+        .is_ok_and(|url| xai_grok_env::is_official_service_url(&url))
+    {
+        tracing::debug!("official voice services are disabled in this fork");
+        return;
+    }
+    // ZMY SELF-ADDED CODE END
     let mut active: Option<ActivePtt> = None;
 
     while let Some(cmd) = cmd_rx.recv().await {

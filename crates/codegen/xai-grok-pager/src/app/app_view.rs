@@ -1186,6 +1186,13 @@ impl AppView {
     }
     /// Welcome privacy banner visibility gates.
     pub fn privacy_banner_should_show(&self) -> bool {
+        // ZMY SELF-ADDED CODE START
+        if !xai_grok_config::Distribution::current()
+            .allows(xai_grok_config::Capability::RemoteFetch)
+        {
+            return false;
+        }
+        // ZMY SELF-ADDED CODE END
         if self.screen_mode.is_minimal() {
             return false;
         }
@@ -2309,11 +2316,20 @@ impl AppView {
         }
         let zdr_blocked = self.is_zdr_blocked();
         let has_access = self.has_access();
+        // ZMY SELF-ADDED CODE START
+        let remote_feature_content_enabled = xai_grok_config::Distribution::current()
+            .allows(xai_grok_config::Capability::RemoteFetch);
+        let announcements_for_input = if remote_feature_content_enabled {
+            self.active_announcements.as_slice()
+        } else {
+            &[]
+        };
         let welcome_pinned_upgrade_cta = crate::views::announcements::promo_cta(
-            &self.active_announcements,
+            announcements_for_input,
             &self.hidden_announcement_ids,
         )
         .is_some_and(|(owner, _, _)| !crate::views::announcements::is_dismissible(owner));
+        // ZMY SELF-ADDED CODE END
         let has_foreign_resume = self.foreign_resume_hint().is_some();
         let sp_loading = crate::views::session_picker::loading_spinner_active(
             self.session_picker_entries.as_deref(),
@@ -2384,9 +2400,11 @@ impl AppView {
                     has_claude_import: self.has_claude_import,
                     import_claude_modal: &mut self.import_claude_modal,
                     welcome_doc_viewer: &mut self.welcome_doc_viewer,
-                    changelog_markdown: &self.changelog_markdown,
-                    show_changelog_action: self.welcome_show_changelog_action,
-                    has_pending_update: self.pending_update_version.is_some(),
+                    // ZMY SELF-ADDED CODE START
+                    changelog_markdown: &None,
+                    show_changelog_action: false,
+                    has_pending_update: false,
+                    // ZMY SELF-ADDED CODE END
                     has_foreign_resume,
                     cwd_has_git_ancestor: self.cwd_has_git_ancestor,
                     session_picker_grouped: self.session_picker_grouped,
@@ -4262,7 +4280,19 @@ impl AppView {
         let compact = self.appearance.prompt.compact;
         let zdr_blocked_for_draw = self.is_zdr_blocked();
         let has_access = self.has_access();
-        let privacy_banner = self.privacy_banner_should_show();
+        // ZMY SELF-ADDED CODE START
+        let remote_feature_content_enabled = xai_grok_config::Distribution::current()
+            .allows(xai_grok_config::Capability::RemoteFetch);
+        let announcements_for_render = if remote_feature_content_enabled {
+            self.active_announcements.as_slice()
+        } else {
+            &[]
+        };
+        let announcement_for_render = remote_feature_content_enabled
+            .then_some(self.announcement.as_ref())
+            .flatten();
+        let privacy_banner = remote_feature_content_enabled && self.privacy_banner_should_show();
+        // ZMY SELF-ADDED CODE END
         let voice_available = self.voice_available();
         let voice_on_surface = self.voice_target_on_active_surface();
         let voice_listening = voice_on_surface && self.voice_listening();
@@ -4273,11 +4303,14 @@ impl AppView {
         let dev_fps_rows = self.dev_fps_rows();
         let fps_overlay = self.fps_hud.overlay(dev_fps_rows);
         let foreign_resume_hint = self.foreign_resume_hint().cloned();
-        let privacy_banner_agent = self.privacy_banner_should_show()
+        // ZMY SELF-ADDED CODE START
+        let privacy_banner_agent = remote_feature_content_enabled
+            && self.privacy_banner_should_show()
             && !crate::views::announcements::has_critical_session_announcement(
-                &self.active_announcements,
+                announcements_for_render,
                 &self.hidden_announcement_ids,
             );
+        // ZMY SELF-ADDED CODE END
         let agent_mouse_pos = self.last_mouse_pos;
         let status_line_frame = self.status_line_frame();
         let welcome_mode = self.home_session().map(|home| {
@@ -4393,19 +4426,21 @@ impl AppView {
                                 None => model_name_base,
                             };
                             let model_notice = self.models.current_notice();
+                            // ZMY SELF-ADDED CODE START
                             let hero_cta = crate::views::announcements::promo_cta(
-                                &self.active_announcements,
+                                announcements_for_render,
                                 &self.hidden_announcement_ids,
                             );
                             let hero_announcement = hero_cta
                                 .map(|(owner, _, _)| owner)
                                 .or_else(|| {
                                     crate::views::announcements::first_session_announcement(
-                                        &self.active_announcements,
+                                        announcements_for_render,
                                         &self.hidden_announcement_ids,
                                     )
                                 })
-                                .or(self.announcement.as_ref());
+                                .or(announcement_for_render);
+                            // ZMY SELF-ADDED CODE END
                             let welcome_params = crate::views::welcome::WelcomeRenderParams {
                                 prompt_focus: if self.welcome_prompt_focused {
                                     WelcomePromptFocus::Focused
@@ -4444,7 +4479,12 @@ impl AppView {
                                 compact,
                                 pending_hint,
                                 startup_warnings: &self.startup_warnings,
-                                pending_update_version: self.pending_update_version.as_deref(),
+                                // ZMY SELF-ADDED CODE START
+                                pending_update_version: xai_grok_config::Distribution::current()
+                                    .allows(xai_grok_config::Capability::RemoteFetch)
+                                    .then_some(self.pending_update_version.as_deref())
+                                    .flatten(),
+                                // ZMY SELF-ADDED CODE END
                                 foreign_resume_hint: foreign_resume_hint.as_ref(),
                                 session_picker_content_results: self
                                     .session_picker_content_results
@@ -4466,8 +4506,10 @@ impl AppView {
                                 auto_topup: self.auto_topup.as_ref(),
                                 usage_visible: self.usage_visible,
                                 is_api_key_auth: self.is_api_key_auth,
-                                changelog_bullets: &self.changelog_bullets,
-                                changelog_has_full_notes: self.changelog_markdown.is_some(),
+                                // ZMY SELF-ADDED CODE START
+                                changelog_bullets: &[],
+                                changelog_has_full_notes: false,
+                                // ZMY SELF-ADDED CODE END
                                 welcome_announcement_expanded: self.welcome_announcement.expanded,
                                 upgrade_cta: hero_cta.map(|(_owner, label, _)| label),
                                 privacy_banner,
@@ -4665,11 +4707,13 @@ impl AppView {
                                 d.restore_peek_viewport(agents);
                             }
                             if let Some(agent) = agents.get_mut(&id) {
+                                // ZMY SELF-ADDED CODE START
                                 let announcement_banner_h =
                                     crate::views::announcements::session_banner_height(
-                                        &self.active_announcements,
+                                        announcements_for_render,
                                         &self.hidden_announcement_ids,
                                     );
+                                // ZMY SELF-ADDED CODE END
                                 let privacy_banner = privacy_banner_agent;
                                 let show_session_tip = !privacy_banner
                                     && self.tip.is_some()
@@ -4695,7 +4739,9 @@ impl AppView {
                                     overlay_focused,
                                     crate::app::agent_view::BannerSlotParams {
                                         height: banner_height,
-                                        announcements: &self.active_announcements,
+                                        // ZMY SELF-ADDED CODE START
+                                        announcements: announcements_for_render,
+                                        // ZMY SELF-ADDED CODE END
                                         hidden_ids: &self.hidden_announcement_ids,
                                         privacy_banner,
                                         mouse_pos: agent_mouse_pos,
@@ -4782,8 +4828,9 @@ impl AppView {
                                     } else {
                                         &self.dashboard_local_sessions
                                     };
+                                // ZMY SELF-ADDED CODE START
                                 let dash_upgrade_cta = crate::views::announcements::promo_cta(
-                                    &self.active_announcements,
+                                    announcements_for_render,
                                     &self.hidden_announcement_ids,
                                 )
                                 .map(|(owner, label, _)| {
@@ -4795,6 +4842,7 @@ impl AppView {
                                         ),
                                     }
                                 });
+                                // ZMY SELF-ADDED CODE END
                                 let workspace_rows =
                                     crate::app::workspace_sync::WorkspaceRowSource::capture(
                                         agents,
@@ -4942,12 +4990,20 @@ impl AppView {
         if !(banner || welcome || header || dashboard) {
             return;
         }
+        // ZMY SELF-ADDED CODE START
         let Some((owner, _label, _url)) = crate::views::announcements::promo_cta(
-            &self.active_announcements,
+            if xai_grok_config::Distribution::current()
+                .allows(xai_grok_config::Capability::RemoteFetch)
+            {
+                &self.active_announcements
+            } else {
+                &[]
+            },
             &self.hidden_announcement_ids,
         ) else {
             return;
         };
+        // ZMY SELF-ADDED CODE END
         let key = xai_grok_announcements::announcement_hide_key(owner);
         let id = owner.id.clone();
         let surfaces = [

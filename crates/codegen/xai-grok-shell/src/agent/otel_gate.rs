@@ -108,9 +108,11 @@ impl OtelGate {
                 self.apply_and_open(identity, Some(&settings));
                 Some(*settings)
             }
-            SettingsFetch::Rejected | SettingsFetch::Retry => {
+            // ZMY SELF-ADDED CODE START
+            SettingsFetch::Rejected | SettingsFetch::Withheld | SettingsFetch::Retry => {
                 self.apply_and_open(identity, None);
                 None
+                // ZMY SELF-ADDED CODE END
             }
         }
     }

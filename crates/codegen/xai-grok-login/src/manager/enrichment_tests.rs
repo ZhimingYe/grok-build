@@ -2,6 +2,37 @@ use super::*;
 use crate::GrokComConfig;
 use xai_grok_test_support::{MockCanAdministerTeam, MockInferenceServer};
 
+// ZMY SELF-ADDED CODE START
+#[tokio::test]
+async fn fork_user_info_skips_official_proxy_for_external_auth_and_keeps_custom_proxy() {
+    let external_auth = || GrokAuth {
+        auth_mode: crate::AuthMode::External,
+        ..GrokAuth::test_default()
+    };
+    let official_home = tempfile::tempdir().unwrap();
+    let official_manager = AuthManager::new(official_home.path(), GrokComConfig::default())
+        .with_proxy_base_url("https://api.x.ai");
+    official_manager.hot_swap(external_auth());
+    assert!(
+        super::fetch_user_info(&official_manager, "external-key", "fork test")
+            .await
+            .is_none()
+    );
+
+    let server = MockInferenceServer::start().await.unwrap();
+    let custom_home = tempfile::tempdir().unwrap();
+    let custom_manager = AuthManager::new(custom_home.path(), GrokComConfig::default())
+        .with_proxy_base_url(&server.url());
+    custom_manager.hot_swap(external_auth());
+    assert!(
+        super::fetch_user_info(&custom_manager, "external-key", "fork test")
+            .await
+            .is_some()
+    );
+    server.user_info_arrived(1).await;
+}
+// ZMY SELF-ADDED CODE END
+
 const USER_A: &str = "a@acme.test";
 
 fn team_auth() -> GrokAuth {

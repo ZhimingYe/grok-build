@@ -1,5 +1,126 @@
 use super::*;
 
+// ZMY SELF-ADDED CODE START
+#[test]
+fn fork_redirect_policy_blocks_official_destinations_and_follows_local_redirects() {
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::time::{Duration, Instant};
+
+    fn read_request(stream: &mut TcpStream) -> String {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let mut request = Vec::new();
+        let mut chunk = [0_u8; 512];
+        while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+            let count = stream.read(&mut chunk).unwrap();
+            assert_ne!(count, 0);
+            request.extend_from_slice(&chunk[..count]);
+        }
+        String::from_utf8_lossy(&request).into_owned()
+    }
+
+    fn respond(stream: &mut TcpStream, status: &str, location: Option<&str>, body: &str) {
+        let location = location
+            .map(|value| format!("Location: {value}\r\n"))
+            .unwrap_or_default();
+        write!(
+            stream,
+            "HTTP/1.1 {status}\r\n{location}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let official_server = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_millis(250);
+        let mut followed = false;
+        while Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let request = read_request(&mut stream);
+                    if request.starts_with("GET /redirect ") {
+                        respond(
+                            &mut stream,
+                            "302 Found",
+                            Some(&format!("http://grok.com:{}/official-target", addr.port())),
+                            "",
+                        );
+                    } else {
+                        followed = true;
+                        respond(&mut stream, "200 OK", None, "should-not-follow");
+                    }
+                    if followed {
+                        break;
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("local redirect listener failed: {error}"),
+            }
+        }
+        followed
+    });
+    let client = build_blocking_reqwest_client(|builder| {
+        builder
+            .no_proxy()
+            .resolve("grok.com", addr)
+            .timeout(Duration::from_secs(1))
+    })
+    .unwrap();
+    let response = client
+        .get(format!("http://{addr}/redirect"))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::FOUND);
+    assert!(!official_server.join().unwrap());
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let local_server = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut handled = 0;
+        while handled < 2 && Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let request = read_request(&mut stream);
+                    if request.starts_with("GET /redirect-local ") {
+                        respond(
+                            &mut stream,
+                            "302 Found",
+                            Some(&format!("http://{addr}/final")),
+                            "",
+                        );
+                    } else {
+                        respond(&mut stream, "200 OK", None, "local-followed");
+                    }
+                    handled += 1;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("local redirect listener failed: {error}"),
+            }
+        }
+        handled
+    });
+    let client = build_blocking_reqwest_client(|builder| builder).unwrap();
+    let response = client
+        .get(format!("http://{addr}/redirect-local"))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_eq!(response.text().unwrap(), "local-followed");
+    assert_eq!(local_server.join().unwrap(), 2);
+}
+// ZMY SELF-ADDED CODE END
+
 // Self-signed PEMs for unit tests only (CN=test-extra-ca-1 / -2).
 const VALID_CERT_1: &str = "-----BEGIN CERTIFICATE-----\n\
 MIIDFTCCAf2gAwIBAgIUT2czXTuxSAjDjEh92UMB1OVahZYwDQYJKoZIhvcNAQEL\n\

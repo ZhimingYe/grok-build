@@ -3052,7 +3052,9 @@ fn dashboard_slash_model_with_a_window_stages_the_model_and_explains_the_window(
         dashboard.error_toast.as_deref()
     );
 }
-/// A tier-restricted command typed into the dashboard dispatch input must upsell via the feedback toast, not execute, and not fall through the unknown-command path, which would spawn a session whose first prompt is the raw slash text.
+// ZMY SELF-ADDED CODE START
+/// A tier-restricted command typed into the dashboard dispatch input reports provider-neutral availability, not execute, and not fall through the unknown-command path, which would spawn a session whose first prompt is the raw slash text.
+// ZMY SELF-ADDED CODE END
 #[serial_test::serial(GROK_AGENT_DASHBOARD)]
 #[test]
 fn dashboard_slash_restricted_command_upsells_via_toast() {
@@ -3072,10 +3074,12 @@ fn dashboard_slash_restricted_command_upsells_via_toast() {
         .error_toast
         .as_deref()
         .expect("restricted command must set the upsell toast");
+    // ZMY SELF-ADDED CODE START
     assert!(
-        toast.contains("/imagine") && toast.contains("SuperGrok"),
-        "toast must carry the upsell: {toast}"
+        toast.contains("/imagine") && toast.contains("configured provider"),
+        "toast must give neutral provider guidance: {toast}"
     );
+    // ZMY SELF-ADDED CODE END
 }
 /// A slash command that fails (`CommandResult::Error`) surfaces on the dashboard with the `✗` error prefix: command error strings carry no glyph of their own, and the feedback badge paints the toast verbatim in a neutral colour, so without the prefix an error would be indistinguishable from a success message.
 #[serial_test::serial(GROK_AGENT_DASHBOARD)]

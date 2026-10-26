@@ -1,4 +1,6 @@
-//! Subscription tier checks, credit-limit upsells, and auto-topup handling.
+// ZMY SELF-ADDED CODE START
+//! Subscription tier checks, provider usage notices, and auto-topup handling.
+// ZMY SELF-ADDED CODE END
 
 use super::queue::{maybe_drain_queue, note_peek_page_flip};
 use crate::app::actions::Effect;
@@ -7,9 +9,10 @@ use crate::app::agent_view::AgentView;
 use crate::app::app_view::AppView;
 use crate::scrollback::block::RenderBlock;
 use std::time::Duration;
-use xai_grok_telemetry::events::{SuperGrokUpsell, SuperGrokUpsellClicked};
-use xai_grok_telemetry::session_ctx::log_event;
 
+// ZMY SELF-ADDED CODE START
+// Official plan and billing destinations and their promotional telemetry are intentionally omitted.
+// ZMY SELF-ADDED CODE END
 /// How long the pager auto-checks subscription status before stopping.
 /// After this, the user can still manually check via the [Refresh] button.
 pub(super) const PAYWALL_AUTO_CHECK_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -25,11 +28,13 @@ pub(super) fn is_max_tier(subscription_tier: Option<&str>) -> bool {
     t.to_ascii_lowercase().replace(' ', "_") == "supergrok_heavy"
 }
 
-/// URL for upgrading the subscription tier.
-pub(crate) const UPSELL_URL_UPGRADE: &str = "https://grok.com/supergrok?referrer=grok-build";
-
-/// URL for managing pay-as-you-go or on-demand spending and purchasing credits.
-pub(crate) const UPSELL_URL_PAYG: &str = "https://grok.com?_s=usage";
+// ZMY SELF-ADDED CODE START
+// Removed production plan-upgrade and credit-purchase URL constants; these test-only sentinels cannot open external links.
+#[cfg(test)]
+pub(crate) const UPSELL_URL_UPGRADE: &str = "https://example.invalid/disabled-upgrade";
+#[cfg(test)]
+pub(crate) const UPSELL_URL_PAYG: &str = "https://example.invalid/disabled-billing";
+// ZMY SELF-ADDED CODE END
 
 /// Billing mode for credit-limit upsell copy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,122 +80,66 @@ pub(crate) fn is_credit_limit_error(http_status: Option<u16>, message: &str) -> 
 /// position in the telemetry `choices` vec.
 pub(crate) const CREDIT_LIMIT_RETRY_OPTION_ID: &str = "retry-last-prompt";
 
-struct CreditLimitCopy {
-    heading: &'static str,
-    upgrade_tier_desc: &'static str,
-    secondary_label: &'static str,
-    secondary_desc: &'static str,
-    second_choice: xai_grok_telemetry::events::CreditLimitChoice,
-    payg_telemetry: bool,
-}
-
-/// Open the credit-limit upsell Q&A on the given agent.
-/// Non-max-tier: Upgrade tier + buy-credits (or PAYG) + Try Again.
-/// Max-tier (SuperGrok Heavy): buy-credits (or PAYG) + Try Again — no upgrade option. URL options carry the target in `id` so the submit handler is position-independent.
+// ZMY SELF-ADDED CODE START
+/// Show an actionable, provider-neutral credit-limit notice on the given agent.
+// ZMY SELF-ADDED CODE END
 pub(super) fn open_credit_limit_upsell(
     agent: &mut AgentView,
     mode: CreditLimitUpsellMode,
-    max_tier: bool,
+    // ZMY SELF-ADDED CODE START
+    _max_tier: bool,
+    // ZMY SELF-ADDED CODE END
 ) {
-    use crate::views::question_view::{LocalQuestionKind, QuestionViewState};
-    use xai_grok_tools::implementations::grok_build::ask_user_question::{
-        Question, QuestionOption,
+    // ZMY SELF-ADDED CODE START
+    // Replaces the official purchase modal with a neutral provider usage notice.
+    let message = match mode {
+        CreditLimitUpsellMode::UnifiedCredits => {
+            "The configured provider reports that no credits remain. Check its usage settings or configure another provider."
+        }
+        CreditLimitUpsellMode::LegacyPayg { .. } => {
+            "The configured provider reports that its spending limit was reached. Check its usage settings or configure another provider."
+        }
     };
-
-    if agent.question_view.is_some() {
-        return;
+    if agent.credit_limit_stashed_prompt.is_some() && agent.question_view.is_none() {
+        let question = crate::views::question_view::Question {
+            question: message.into(),
+            id: None,
+            options: vec![crate::views::question_view::QuestionOption {
+                label: "Try Again".into(),
+                description: "Retry the previous prompt".into(),
+                preview: None,
+                id: Some(CREDIT_LIMIT_RETRY_OPTION_ID.into()),
+            }],
+            multi_select: Some(false),
+        };
+        let state = crate::views::question_view::QuestionViewState::new(
+            format!("credit-limit-{}", uuid::Uuid::new_v4()),
+            vec![question],
+            agent.prompt.stash(),
+        )
+        .with_local_kind(
+            crate::views::question_view::LocalQuestionKind::CreditLimitUpsell { choices: vec![] },
+        )
+        .with_no_freeform();
+        agent.install_local_question(state);
+        agent.prompt.set_text("");
+    } else {
+        agent.show_toast(message);
     }
-
-    let copy = match mode {
-        CreditLimitUpsellMode::UnifiedCredits => CreditLimitCopy {
-            heading: "You hit your weekly limit.",
-            upgrade_tier_desc: "Upgrade to a higher tier for more usage",
-            secondary_label: "Buy more credits",
-            secondary_desc: "Purchase credits to keep using Grok Build",
-            second_choice: xai_grok_telemetry::events::CreditLimitChoice::PurchaseCredits,
-            payg_telemetry: false,
-        },
-        CreditLimitUpsellMode::LegacyPayg { enabled: true } => CreditLimitCopy {
-            heading: "You\u{2019}ve hit your spending cap.",
-            upgrade_tier_desc: "Upgrade to a higher tier for more credits",
-            secondary_label: "Increase limit",
-            secondary_desc: "Raise your pay-as-you-go spending cap",
-            second_choice: xai_grok_telemetry::events::CreditLimitChoice::PayAsYouGo,
-            payg_telemetry: true,
-        },
-        CreditLimitUpsellMode::LegacyPayg { enabled: false } => CreditLimitCopy {
-            heading: "You\u{2019}ve hit the credit limit for your plan.",
-            upgrade_tier_desc: "Upgrade to a higher tier for more credits",
-            secondary_label: "Pay as you go",
-            secondary_desc: "Enable pay-as-you-go credits for on-demand usage",
-            second_choice: xai_grok_telemetry::events::CreditLimitChoice::PayAsYouGo,
-            payg_telemetry: false,
-        },
-    };
-    let unified_billing = matches!(mode, CreditLimitUpsellMode::UnifiedCredits);
-
-    log_event(xai_grok_telemetry::events::CreditLimitUpsellShown {
-        surface: xai_grok_telemetry::events::CreditLimitUpsellSurface::QuestionModal,
-        max_tier,
-        pay_as_you_go: copy.payg_telemetry,
-        unified_billing,
-    });
-
-    let mut options = Vec::new();
-    let mut choices = Vec::new();
-    if !max_tier {
-        options.push(QuestionOption {
-            label: "Upgrade tier".into(),
-            description: copy.upgrade_tier_desc.into(),
-            preview: None,
-            id: Some(UPSELL_URL_UPGRADE.into()),
-        });
-        choices.push(xai_grok_telemetry::events::CreditLimitChoice::UpgradeTier);
-    }
-    options.push(QuestionOption {
-        label: copy.secondary_label.into(),
-        description: copy.secondary_desc.into(),
-        preview: None,
-        id: Some(UPSELL_URL_PAYG.into()),
-    });
-    choices.push(copy.second_choice);
-    options.push(QuestionOption {
-        label: "Try Again".into(),
-        description: "Resubmit the last prompt once you have usage again".into(),
-        preview: None,
-        id: Some(CREDIT_LIMIT_RETRY_OPTION_ID.into()),
-    });
-    choices.push(xai_grok_telemetry::events::CreditLimitChoice::RetryLastPrompt);
-
-    let question = Question {
-        question: copy.heading.into(),
-        options,
-        multi_select: Some(false),
-        id: None,
-    };
-
-    let stashed = agent.prompt.stash();
-    let state = QuestionViewState::new(
-        format!("credit-limit-upsell-{}", uuid::Uuid::new_v4()),
-        vec![question],
-        stashed,
-    )
-    .with_local_kind(LocalQuestionKind::CreditLimitUpsell { choices })
-    .with_no_freeform();
-    agent.install_local_question(state);
-    agent.prompt.set_text("");
+    // ZMY SELF-ADDED CODE END
 }
 
-/// Open the free-usage paywall on the given agent: a Q&A modal in the [`open_credit_limit_upsell`] style with two upgrade options.
-/// Each option's `id` carries its target URL so the submit handler is position-independent.
+// ZMY SELF-ADDED CODE START
+/// Show a provider-neutral status when configured-provider usage is exhausted.
+// ZMY SELF-ADDED CODE END
 /// Only the driver can reach this: the PromptResponse handler calls it, and viewers never receive that response.
 pub(super) fn open_free_usage_upsell(agent: &mut AgentView, auth_method: Option<String>) {
     open_supergrok_upsell(agent, UpsellReason::FreeUsageLimit, auth_method);
 }
 
-/// Open the SuperGrok upsell for a tier-restricted slash command (`/usage`, `/imagine`, …).
-/// Returns whether the modal opened (`false` when another question modal is already up).
-/// The caller uses that to decide whether to consume the input that triggered it.
+// ZMY SELF-ADDED CODE START
+/// Show a provider-neutral status for an unavailable command.
+// ZMY SELF-ADDED CODE END
 pub(super) fn open_restricted_command_upsell(
     agent: &mut AgentView,
     auth_method: Option<String>,
@@ -198,7 +147,9 @@ pub(super) fn open_restricted_command_upsell(
     open_supergrok_upsell(agent, UpsellReason::RestrictedCommand, auth_method)
 }
 
-/// Which situation opened the SuperGrok upsell modal; it controls the heading and the telemetry source.
+// ZMY SELF-ADDED CODE START
+/// Which provider limitation should be explained to the user.
+// ZMY SELF-ADDED CODE END
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum UpsellReason {
     /// Free-usage quota exhausted (429 paywall).
@@ -207,80 +158,27 @@ pub(super) enum UpsellReason {
     RestrictedCommand,
 }
 
-/// Shared builder behind [`open_free_usage_upsell`] and [`open_restricted_command_upsell`]: a Q&A modal in the [`open_credit_limit_upsell`] style.
-/// Upgrade options carry their target URL in the option `id`, so submit handling does not depend on option position.
+// ZMY SELF-ADDED CODE START
+/// Shared provider-neutral status builder.
+// ZMY SELF-ADDED CODE END
 fn open_supergrok_upsell(
     agent: &mut AgentView,
     reason: UpsellReason,
     auth_method: Option<String>,
 ) -> bool {
-    use crate::views::question_view::{LocalQuestionKind, QuestionViewState};
-    use xai_grok_tools::implementations::grok_build::ask_user_question::{
-        Question, QuestionOption,
+    // ZMY SELF-ADDED CODE START
+    // Replaces official subscription upgrade content and links with provider guidance.
+    let _ = auth_method;
+    let message = match reason {
+        UpsellReason::FreeUsageLimit => {
+            "The configured provider reports that its usage limit was reached. Check its quota or configure another provider."
+        }
+        UpsellReason::RestrictedCommand => {
+            "This command is unavailable with the configured provider. Choose a provider or model that supports it."
+        }
     };
-
-    // Never displace an already-open question modal
-    // Callers that consume input on open must check this `false` and keep the input instead
-    if agent.question_view.is_some() {
-        return false;
-    }
-
-    let (heading, source, modal_id_prefix) = match reason {
-        UpsellReason::FreeUsageLimit => (
-            "You hit your free usage limit.",
-            SuperGrokUpsell::FreeUsagePaywall,
-            "free-usage-upsell",
-        ),
-        UpsellReason::RestrictedCommand => (
-            "Unlock all features with SuperGrok.",
-            SuperGrokUpsell::RestrictedCommand,
-            "restricted-command-upsell",
-        ),
-    };
-
-    log_event(xai_grok_telemetry::events::SuperGrokUpsellShown {
-        source,
-        auth_method,
-    });
-
-    // /supergrok lists all plans; every upgrade option lands there.
-    let options = vec![
-        QuestionOption {
-            label: "Upgrade to SuperGrok".into(),
-            description: "For everyday coding and productivity tasks".into(),
-            preview: None,
-            id: Some(UPSELL_URL_UPGRADE.into()),
-        },
-        QuestionOption {
-            label: "Upgrade to SuperGrok Plus".into(),
-            description: "Significantly higher usage and rate limits".into(),
-            preview: None,
-            id: Some(UPSELL_URL_UPGRADE.into()),
-        },
-        QuestionOption {
-            label: "Upgrade to SuperGrok Heavy".into(),
-            description: "Get the most out of Grok Build. Highest usage limits.".into(),
-            preview: None,
-            id: Some(UPSELL_URL_UPGRADE.into()),
-        },
-    ];
-    let question = Question {
-        question: heading.into(),
-        options,
-        multi_select: Some(false),
-        id: None,
-    };
-
-    let stashed = agent.prompt.stash();
-    let state = QuestionViewState::new(
-        format!("{modal_id_prefix}-{}", uuid::Uuid::new_v4()),
-        vec![question],
-        stashed,
-    )
-    .with_local_kind(LocalQuestionKind::FreeUsageUpsell { source })
-    .with_no_freeform();
-    agent.install_local_question(state);
-    agent.prompt.set_text("");
+    agent.show_toast(message);
+    // ZMY SELF-ADDED CODE END
     true
 }
 
@@ -543,19 +441,10 @@ pub(super) fn dispatch_retry_credit_limit_prompt(app: &mut AppView) -> Vec<Effec
 // Action handlers.
 
 pub(super) fn dispatch_open_supergrok_url(app: &mut AppView) -> Vec<Effect> {
-    log_event(SuperGrokUpsellClicked {
-        source: SuperGrokUpsell::WelcomeScreen,
-        auth_method: app.login_method_id.as_ref().map(|id| id.0.to_string()),
-    });
-    let url = app
-        .gate
-        .as_ref()
-        .and_then(|g| g.url.as_deref())
-        .unwrap_or("https://grok.com/supergrok?referrer=grok-build");
-    // Funnel attribution: tag SuperGrok upsell clicks from the CLI with `referrer=grok-build`, matching the OAuth consent flow and x.ai/cli links
-    // It applies even when the URL came from remote settings's `gate_url`, so nothing depends on the remote flag being configured correctly
-    // If the URL already specifies a referrer it's left alone
-    let url = crate::app::link_opener::ensure_query_param(url, "referrer", "grok-build");
-    super::ctx::open_url_or_show(app, &url);
+    // ZMY SELF-ADDED CODE START
+    app.show_toast(
+        "Official plan links are disabled. Configure a custom provider to use this feature.",
+    );
+    // ZMY SELF-ADDED CODE END
     vec![]
 }

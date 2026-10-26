@@ -28,6 +28,12 @@ pub async fn handle(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
 }
 
 async fn handle_share_session(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
+    // ZMY SELF-ADDED CODE START
+    if !xai_grok_config::Distribution::current().allows(xai_grok_config::Capability::RemoteControl)
+    {
+        return Err(acp::Error::invalid_params().data(xai_grok_env::OFFICIAL_SERVICES_DISABLED));
+    }
+    // ZMY SELF-ADDED CODE END
     let request: ShareSessionRequest = parse_params(args)?;
 
     let auth = require_xai_auth_for_share(&agent.auth_manager)?;

@@ -1110,6 +1110,12 @@ async fn handle_workspace_start(
     cwd: String,
     cancel: CancellationToken,
 ) -> Result<ControlPayload, ControlError> {
+    // ZMY SELF-ADDED CODE START
+    if !xai_grok_config::Distribution::current().allows(xai_grok_config::Capability::RemoteControl)
+    {
+        return Err(workspace_err(xai_grok_env::OFFICIAL_SERVICES_DISABLED));
+    }
+    // ZMY SELF-ADDED CODE END
     let ws = &control_state.workspace;
     let url_str = hub_url
         .filter(|u| !u.trim().is_empty())

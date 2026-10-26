@@ -12,6 +12,10 @@ pub enum SettingsFetch {
     /// The server rejected the credential with a 401.
     /// No remote policy will ever reach this leader.
     Rejected,
+    // ZMY SELF-ADDED CODE START
+    /// This distribution does not fetch remote settings.
+    Withheld,
+    // ZMY SELF-ADDED CODE END
     /// The fetch finished and failed with something other than a 401.
     /// External OTEL export may still start under the local policy.
     Retry,
@@ -20,7 +24,9 @@ impl SettingsFetch {
     pub fn into_option(self) -> Option<RemoteSettings> {
         match self {
             SettingsFetch::Fetched(s) => Some(*s),
-            SettingsFetch::Rejected | SettingsFetch::Retry => None,
+            // ZMY SELF-ADDED CODE START
+            SettingsFetch::Rejected | SettingsFetch::Withheld | SettingsFetch::Retry => None,
+            // ZMY SELF-ADDED CODE END
         }
     }
 }
@@ -30,6 +36,11 @@ pub fn fetch_settings_blocking(
     auth: &GrokAuth,
     alpha_test_key: Option<&str>,
 ) -> SettingsFetch {
+    // ZMY SELF-ADDED CODE START
+    if !xai_grok_config::Distribution::current().allows(xai_grok_config::Capability::RemoteFetch) {
+        return SettingsFetch::Withheld;
+    }
+    // ZMY SELF-ADDED CODE END
     fetch_settings_blocking_with_attempts(
         cli_chat_proxy_base_url,
         auth,

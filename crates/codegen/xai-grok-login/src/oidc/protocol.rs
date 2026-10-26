@@ -249,7 +249,20 @@ const DISCOVERY_CACHE_TTL: StdDuration = StdDuration::from_secs(3600);
 /// Process-global because the discovery doc is identity-free; multiple AuthManagers pointed at the same IdP share one entry.
 static DISCOVERY_CACHE: LazyLock<RwLock<HashMap<String, (Discovery, Instant)>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
+
+// ZMY SELF-ADDED CODE START
+fn ensure_nonofficial_oidc_url(url: &str) -> anyhow::Result<()> {
+    if xai_grok_env::is_official_service_url(url) {
+        anyhow::bail!("{}", xai_grok_env::OFFICIAL_SERVICES_DISABLED);
+    }
+    Ok(())
+}
+// ZMY SELF-ADDED CODE END
+
 pub(super) async fn discover(issuer: &str) -> anyhow::Result<Discovery> {
+    // ZMY SELF-ADDED CODE START
+    ensure_nonofficial_oidc_url(issuer)?;
+    // ZMY SELF-ADDED CODE END
     let issuer_key = issuer.trim_end_matches('/').to_owned();
     if let Some((doc, at)) = DISCOVERY_CACHE.read().get(&issuer_key)
         && at.elapsed() < DISCOVERY_CACHE_TTL
@@ -277,6 +290,9 @@ fn discovery_retry_policy() -> backon::ExponentialBuilder {
         .with_jitter()
 }
 async fn discover_once(issuer_key: &str) -> anyhow::Result<Discovery> {
+    // ZMY SELF-ADDED CODE START
+    ensure_nonofficial_oidc_url(issuer_key)?;
+    // ZMY SELF-ADDED CODE END
     let url = format!("{issuer_key}/.well-known/openid-configuration");
     tracing::debug!(url = %url, "OIDC: fetching discovery document");
     let resp = with_alpha_test_key(
@@ -294,6 +310,13 @@ async fn discover_once(issuer_key: &str) -> anyhow::Result<Discovery> {
         }));
     }
     let doc: Discovery = resp.json().await?;
+    // ZMY SELF-ADDED CODE START
+    ensure_nonofficial_oidc_url(&doc.authorization_endpoint)?;
+    ensure_nonofficial_oidc_url(&doc.token_endpoint)?;
+    if let Some(jwks_uri) = &doc.jwks_uri {
+        ensure_nonofficial_oidc_url(jwks_uri)?;
+    }
+    // ZMY SELF-ADDED CODE END
     tracing::debug!(
         authorization_endpoint = %doc.authorization_endpoint,
         token_endpoint = %doc.token_endpoint,
@@ -382,6 +405,9 @@ pub(super) async fn exchange_code(
     client_id: &str,
     code_verifier: &str,
 ) -> anyhow::Result<TokenResponse> {
+    // ZMY SELF-ADDED CODE START
+    ensure_nonofficial_oidc_url(token_endpoint)?;
+    // ZMY SELF-ADDED CODE END
     tracing::debug!(token_endpoint = %token_endpoint, "OIDC: exchanging code for tokens");
     let resp = with_alpha_test_key(
         xai_grok_http::shared_client()
@@ -443,6 +469,9 @@ pub(super) async fn refresh_tokens(
     principal_type: Option<&str>,
     principal_id: Option<&str>,
 ) -> anyhow::Result<TokenResponse> {
+    // ZMY SELF-ADDED CODE START
+    ensure_nonofficial_oidc_url(token_endpoint)?;
+    // ZMY SELF-ADDED CODE END
     use backon::Retryable;
     tracing::debug!(
         token_endpoint = %token_endpoint,
@@ -621,6 +650,9 @@ pub(super) async fn validate_and_extract_user_info(
         .jwks_uri
         .as_ref()
         .ok_or_else(|| anyhow::Error::new(OidcError::DiscoveryMissingJwksUri))?;
+    // ZMY SELF-ADDED CODE START
+    ensure_nonofficial_oidc_url(jwks_uri)?;
+    // ZMY SELF-ADDED CODE END
     let jwks: jsonwebtoken::jwk::JwkSet = with_alpha_test_key(
         xai_grok_http::shared_client()
             .get(jwks_uri)

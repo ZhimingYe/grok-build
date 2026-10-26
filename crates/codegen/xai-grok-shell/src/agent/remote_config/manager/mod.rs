@@ -262,13 +262,22 @@ impl ModelsManager {
             auth_manager.current_or_expired().as_ref(),
         );
         let mut cached_etag = None;
-        let prefetched_models = prefetched_models.or_else(|| {
-            let cache = ModelsCacheManager::new();
-            cache.load_fresh(&scope).map(|c| {
-                cached_etag = c.etag;
-                c.models
-            })
-        });
+        // ZMY SELF-ADDED CODE START
+        let remote_catalog_allowed =
+            models_fetch_enabled(&cfg.endpoints, auth_manager.current_or_expired().as_ref());
+        let prefetched_models = remote_catalog_allowed
+            .then_some(prefetched_models)
+            .flatten()
+            .or_else(|| {
+                remote_catalog_allowed.then(|| {
+                    let cache = ModelsCacheManager::new();
+                    cache.load_fresh(&scope).map(|c| {
+                        cached_etag = c.etag;
+                        c.models
+                    })
+                })?
+            });
+        // ZMY SELF-ADDED CODE END
         let has_prefetched = prefetched_models.is_some();
         let catalog = resolve_model_catalog(cfg, prefetched_models.clone());
 
@@ -811,6 +820,11 @@ impl ModelsManager {
     }
 
     fn reload_from_cache_manager(&self, cache: &ModelsCacheManager) {
+        // ZMY SELF-ADDED CODE START
+        if !self.is_models_fetch_enabled() {
+            return;
+        }
+        // ZMY SELF-ADDED CODE END
         let Some(cached) = cache.load_fresh(&self.cache_scope()) else {
             tracing::debug!("models cache changed on disk but is not loadable; ignoring");
             return;

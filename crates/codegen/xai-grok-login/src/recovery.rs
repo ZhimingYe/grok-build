@@ -18,6 +18,9 @@ use xai_grok_telemetry::events::{AuthTokenKind, ManualAuth, ManualAuthReason, Ma
 pub fn manual_auth_reason(err: &AuthError) -> Option<ManualAuthReason> {
     use ManualAuthReason as R;
     Some(match err {
+        // ZMY SELF-ADDED CODE START
+        AuthError::OfficialServicesDisabled => return None,
+        // ZMY SELF-ADDED CODE END
         AuthError::Refresh(RefreshTokenError::Permanent(e)) => match e.reason {
             RefreshTokenFailedReason::RefreshTokenRejected => R::RefreshTokenRejected,
             RefreshTokenFailedReason::ProviderInteractiveRequired => R::ProviderInteractiveRequired,
@@ -40,6 +43,9 @@ pub fn manual_auth_reason(err: &AuthError) -> Option<ManualAuthReason> {
 /// Exhaustive and independent of `manual_auth_reason`, which buckets errors for the `manual_auth` KPI: a telemetry reclassification must not change how long a relay lives. The two differ in both directions: `ApiKeyAuthDisabled` cancels but is outside the KPI, and a non-sticky permanent verdict (`ProviderInteractiveRequired`) counts toward the KPI but does not cancel. Non-sticky verdicts age out via `PERMANENT_FAILURE_TTL`, and the relay runs on a child cancellation token, so cancelling on one would leave a headless leader alive but unreachable for its whole lifetime.
 pub fn relay_should_cancel(err: &AuthError) -> bool {
     match err {
+        // ZMY SELF-ADDED CODE START
+        AuthError::OfficialServicesDisabled => true,
+        // ZMY SELF-ADDED CODE END
         AuthError::NotLoggedIn | AuthError::Refresh(RefreshTokenError::Transient(_)) => false,
         AuthError::Refresh(RefreshTokenError::Permanent(e)) => e.reason.is_sticky(),
         AuthError::TokenExpiredNoRefresh

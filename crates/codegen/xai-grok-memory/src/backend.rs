@@ -160,6 +160,11 @@ async fn build_embedding_provider(
     static_api_key: Option<&str>,
     base_url: &str,
 ) -> Option<super::embedding::ApiEmbeddingProvider> {
+    // ZMY SELF-ADDED CODE START
+    if xai_grok_env::is_official_service_url(base_url) {
+        return None;
+    }
+    // ZMY SELF-ADDED CODE END
     let config = config?;
     if config.model.as_ref().is_none_or(|m| m.is_empty()) {
         return None;

@@ -67,6 +67,9 @@ xai-ratatui-inline = { workspace = true }
 # ACP
 agent-client-protocol = { workspace = true }
 xai-grok-config = { workspace = true }
+# ZMY SELF-ADDED CODE START
+xai-grok-env = { workspace = true }
+# ZMY SELF-ADDED CODE END
 xai-grok-shared = { workspace = true }
 xai-grok-workspace = { workspace = true }
 xai-grok-telemetry = { workspace = true }

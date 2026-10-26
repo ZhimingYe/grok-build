@@ -109,6 +109,11 @@ impl ConversationsClient {
     }
 
     async fn require_xai_auth(&self) -> Result<GrokAuth, ConvError> {
+        // ZMY SELF-ADDED CODE START
+        if xai_grok_env::is_official_service_url(&self.base_url) {
+            return Err(ConvError::NoOauth);
+        }
+        // ZMY SELF-ADDED CODE END
         let auth = self.auth.auth().await.map_err(|_| ConvError::NoOauth)?;
         if !auth.is_xai_auth() {
             return Err(ConvError::NoOauth);

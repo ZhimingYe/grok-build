@@ -5218,6 +5218,28 @@ fn fork_accountless_env(grok_home: &std::path::Path) -> Vec<xai_grok_test_suppor
     ]
 }
 
+fn build_accountless_agent_with_local_model(api_key_auth_disabled: bool) -> MvpAgent {
+    use crate::agent::config::{Config, ModelEntry};
+    use xai_grok_login::AuthManager;
+    let mut cfg = Config::default();
+    cfg.grok_com_config.disable_api_key_auth = api_key_auth_disabled.then_some(true);
+    let grok_home = crate::util::grok_home::grok_home();
+    let auth_manager =
+        std::sync::Arc::new(AuthManager::new(&grok_home, cfg.grok_com_config.clone()));
+    let mut model = ModelEntry::fallback("test-model", &cfg.endpoints);
+    model.info.base_url = "http://127.0.0.1:9999/v1".to_owned();
+    let models = indexmap::IndexMap::from([("test-model".to_owned(), model)]);
+    let models_manager = crate::agent::remote_config::ModelsManager::new(
+        Some(models.clone()),
+        models,
+        acp::ModelId::new("test-model"),
+        auth_manager.clone(),
+        cfg.clone(),
+    );
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    MvpAgent::with_models(GatewaySender::new(tx), &cfg, auth_manager, models_manager)
+}
+
 fn initialize_accountless_session_agent(agent: &MvpAgent) {
     let init = acp::InitializeRequest::new(acp::ProtocolVersion::V1).client_capabilities(
         acp::ClientCapabilities::new()
@@ -5249,7 +5271,7 @@ fn fork_accountless_session_can_be_created_and_reloaded_without_auth_method() {
     run_local_for_bridge_test(|| {
         Box::pin(async move {
             let cwd = tempfile::tempdir().unwrap();
-            let agent = build_minimal_agent_for_tests();
+            let agent = build_accountless_agent_with_local_model(false);
             let created = new_session_without_auth_method(&agent, cwd.path())
                 .await
                 .expect("accountless session/new succeeds");
@@ -5261,7 +5283,7 @@ fn fork_accountless_session_can_be_created_and_reloaded_without_auth_method() {
             agent.remove_session(&sid);
             drop(agent);
 
-            let reopened = build_minimal_agent_for_tests();
+            let reopened = build_accountless_agent_with_local_model(false);
             initialize_accountless_session_agent(&reopened);
             reopened
                 .load_session_inner(acp::LoadSessionRequest::new(
@@ -5286,7 +5308,7 @@ fn fork_accountless_session_is_rejected_when_api_key_auth_is_disabled() {
     let _env = fork_accountless_env(home.path());
     run_local_for_bridge_test(|| {
         Box::pin(async move {
-            let agent = build_agent_with_api_key_auth_disabled();
+            let agent = build_accountless_agent_with_local_model(true);
             let cwd = tempfile::tempdir().unwrap();
             let err = new_session_without_auth_method(&agent, cwd.path())
                 .await

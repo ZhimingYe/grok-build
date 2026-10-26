@@ -245,6 +245,11 @@ fn reveal_in_explorer(path: &std::path::Path) -> bool {
 /// Uses the `url` crate for scheme extraction, falling back to prefix matching for non-standard URLs that `url::Url::parse` rejects.
 pub fn is_safe_to_open(url: &str, filter: SchemeFilter) -> bool {
     let url = url.trim();
+    // ZMY SELF-ADDED CODE START
+    if xai_grok_env::is_official_service_url(url) {
+        return false;
+    }
+    // ZMY SELF-ADDED CODE END
     if let Ok(parsed) = url::Url::parse(url) {
         return filter.allows(parsed.scheme());
     }
@@ -593,4 +598,14 @@ mod tests {
             OpenUrlResult::RejectedScheme
         );
     }
+
+    // ZMY SELF-ADDED CODE START
+    #[test]
+    fn fork_official_url_is_rejected_without_manual_open_guidance() {
+        assert_eq!(
+            try_open_url("https://docs.grok.com/help", SchemeFilter::Standard),
+            OpenUrlResult::RejectedScheme
+        );
+    }
+    // ZMY SELF-ADDED CODE END
 }

@@ -110,7 +110,11 @@ fn announcements_state_path() -> PathBuf {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Return only announcements with non-empty (trimmed) messages.
+// ZMY SELF-ADDED CODE START
 pub fn visible_announcements(announcements: &[RemoteAnnouncement]) -> Vec<&RemoteAnnouncement> {
+    if !xai_grok_config::Distribution::current().allows(xai_grok_config::Capability::RemoteFetch) {
+        return Vec::new();
+    }
     announcements
         .iter()
         .filter(|a| {
@@ -121,6 +125,7 @@ pub fn visible_announcements(announcements: &[RemoteAnnouncement]) -> Vec<&Remot
         })
         .collect()
 }
+// ZMY SELF-ADDED CODE END
 
 /// Filter out announcements whose `expires_at` is in the past.
 pub fn filter_expired(
@@ -162,6 +167,11 @@ pub fn is_expired_at(a: &RemoteAnnouncement, now: DateTime<Utc>) -> bool {
 pub fn resolve_startup(
     remote_announcements: Option<Vec<RemoteAnnouncement>>,
 ) -> Option<Vec<RemoteAnnouncement>> {
+    // ZMY SELF-ADDED CODE START
+    if !xai_grok_config::Distribution::current().allows(xai_grok_config::Capability::RemoteFetch) {
+        return Some(Vec::new());
+    }
+    // ZMY SELF-ADDED CODE END
     if let Ok(raw) = std::env::var("GROK_ANNOUNCEMENTS_OVERRIDE") {
         match serde_json::from_str::<Vec<RemoteAnnouncement>>(&raw) {
             Ok(list) => return Some(list),
@@ -243,15 +253,33 @@ mod tests {
         }
         let result = resolve_startup(None);
         assert!(result.is_some());
-        assert_eq!(
-            result.unwrap().first().and_then(|a| a.id.as_deref()),
-            Some("test")
-        );
+        // ZMY SELF-ADDED CODE START
+        assert_eq!(result.unwrap().first().and_then(|a| a.id.as_deref()), None);
+        // ZMY SELF-ADDED CODE END
         // SAFETY: test-only
         unsafe {
             std::env::remove_var("GROK_ANNOUNCEMENTS_OVERRIDE");
         }
     }
+
+    // ZMY SELF-ADDED CODE START
+    #[test]
+    fn fork_refresh_and_cached_announcements_are_suppressed() {
+        let cached = vec![RemoteAnnouncement {
+            id: Some("old-cache".into()),
+            message: Some("cached notice".into()),
+            ..Default::default()
+        }];
+        assert!(
+            visible_announcements(&cached).is_empty(),
+            "cached announcement input must not be visible"
+        );
+        assert!(
+            resolve_startup(Some(cached)).is_some_and(|items| items.is_empty()),
+            "refresh input must be discarded"
+        );
+    }
+    // ZMY SELF-ADDED CODE END
 
     #[test]
     fn hidden_ids_round_trip() {
@@ -367,6 +395,9 @@ mod tests {
             message: Some("   ".into()),
             ..Default::default()
         };
-        assert_eq!(visible_announcements(&[a1, a2, a3]).len(), 1);
+        // ZMY SELF-ADDED CODE START
+        // No upstream announcement content is shown, even when a message is populated.
+        assert!(visible_announcements(&[a1, a2, a3]).is_empty());
+        // ZMY SELF-ADDED CODE END
     }
 }

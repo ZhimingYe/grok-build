@@ -408,35 +408,11 @@ impl AuthManager {
         manager.enforce_pin_on_loaded_token();
         manager
     }
-    /// Drops inherited `WebLogin` entries that `lookup_auth` skipped, so they are not re-evaluated on
-    /// every launch. Best-effort under the advisory lock: a concurrent holder means retry next launch.
-    fn prune_stale_inherited_scopes(path: &Path, map: &AuthStore, lookup_missed: bool) {
-        if !lookup_missed {
-            return;
-        }
-        let stale: Vec<&str> = ActiveAuthBackend::default()
-            .inherited_scopes()
-            .iter()
-            .filter(|scope| {
-                map.get(**scope)
-                    .is_some_and(|a| a.auth_mode == AuthMode::WebLogin)
-            })
-            .copied()
-            .collect();
-        if stale.is_empty() {
-            return;
-        }
-        let Some(_lock) = lock::try_lock_auth_file_nonblocking(path) else {
-            tracing::debug!("auth: skipped WebLogin cleanup (lock unavailable)");
-            return;
-        };
-        let mut cleaned = map.clone();
-        for scope in stale {
-            cleaned.remove(scope);
-        }
-        let _ = write_auth_json(path, &cleaned);
-        tracing::debug!("auth: removed stale WebLogin scope from auth.json");
+    // ZMY SELF-ADDED CODE START
+    fn prune_stale_inherited_scopes(_path: &Path, _map: &AuthStore, _lookup_missed: bool) {
+        // Legacy official credentials are ignored by lookup_auth but remain on disk for the user.
     }
+    // ZMY SELF-ADDED CODE END
     /// Single field-assembly point for [`Self::new`]'s two construction paths (inline `GROK_AUTH` vs. on-disk `auth.json`), which differ only in the threaded fields. One literal means a newly added field can't be silently dropped from one branch.
     fn assemble(
         inner: Option<GrokAuth>,
@@ -501,7 +477,15 @@ impl AuthManager {
         if let Some(auth) = loaded
             && let Some(e) = self.cached_token_policy_error(&auth)
         {
-            self.reject_and_clear(&e);
+            // ZMY SELF-ADDED CODE START
+            if matches!(&e, AuthError::OfficialServicesDisabled) {
+                tracing::info!(
+                    "auth: cached official credential refused without deleting stored credentials"
+                );
+            } else {
+                self.reject_and_clear(&e);
+            }
+            // ZMY SELF-ADDED CODE END
         }
     }
     /// Override the proxy base URL (precedence over env var).
@@ -640,8 +624,25 @@ impl AuthManager {
     /// `Some(error)` when a `force_login_team_uuid` pin is set and the token's team principal isn't allowed; `None` when compliant or unpinned. Reads the principal from the token's own (unverified) JWT claim.
     /// This is fail-fast defense-in-depth, not the security boundary (the server is authoritative). An API-key session is rejected under the kill switch, else allowed.
     pub fn cached_token_policy_error(&self, auth: &GrokAuth) -> Option<AuthError> {
+        // ZMY SELF-ADDED CODE START
+        if auth.is_xai_auth() || auth.auth_mode == AuthMode::WebLogin {
+            return Some(AuthError::OfficialServicesDisabled);
+        }
+        // ZMY SELF-ADDED CODE END
         Self::login_policy_error(&self.grok_com_config, auth)
     }
+
+    // ZMY SELF-ADDED CODE START
+    /// Return the policy error for a cached official credential without exposing it.
+    pub fn cached_official_auth_error(&self) -> Option<AuthError> {
+        self.with_inner_read(|inner| {
+            inner.as_ref().and_then(|auth| {
+                (auth.is_xai_auth() || auth.auth_mode == AuthMode::WebLogin)
+                    .then_some(AuthError::OfficialServicesDisabled)
+            })
+        })
+    }
+    // ZMY SELF-ADDED CODE END
     /// Log and clear a policy-violating session (disk and memory) so the next launch forces a fresh, compliant login.
     pub(crate) fn reject_and_clear(&self, error: &AuthError) {
         let policy = match error {
@@ -667,6 +668,12 @@ impl AuthManager {
             tracing::debug!("auth: hiding a cached session another authority minted");
             return None;
         }
+        // ZMY SELF-ADDED CODE START
+        if auth.is_xai_auth() || auth.auth_mode == AuthMode::WebLogin {
+            tracing::debug!("auth: hiding a cached official Grok/xAI session");
+            return None;
+        }
+        // ZMY SELF-ADDED CODE END
         Some(auth)
     }
     /// Hide a cached token rejected by the login policy.
@@ -861,6 +868,14 @@ impl AuthManager {
     /// **Caller holds the `auth.json` file lock** (production callers: `refresh_chain` Success arm, `flow::run_auth_flow`).
     /// Returns the input `GrokAuth` BEFORE enrichment lands; callers needing the post-enrichment view re-read `current()`.
     pub async fn update(self: &Arc<Self>, auth: GrokAuth) -> std::io::Result<GrokAuth> {
+        // ZMY SELF-ADDED CODE START
+        if auth.is_xai_auth() || auth.auth_mode == AuthMode::WebLogin {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                xai_grok_env::OFFICIAL_SERVICES_DISABLED,
+            ));
+        }
+        // ZMY SELF-ADDED CODE END
         let update_started = std::time::Instant::now();
         let map = match read_auth_json_or_empty_recovering_corrupt(&self.path) {
             Ok(map) => map,
@@ -908,6 +923,14 @@ impl AuthManager {
     }
     /// Persist to disk and cache without spawning the background `/user` task (already merged inline, or a stale fetch must not race a fresh write).
     pub async fn save_without_enrichment(&self, auth: GrokAuth) -> std::io::Result<GrokAuth> {
+        // ZMY SELF-ADDED CODE START
+        if auth.is_xai_auth() || auth.auth_mode == AuthMode::WebLogin {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                xai_grok_env::OFFICIAL_SERVICES_DISABLED,
+            ));
+        }
+        // ZMY SELF-ADDED CODE END
         let started = std::time::Instant::now();
         let map = match read_auth_json_or_empty_recovering_corrupt(&self.path) {
             Ok(map) => map,
@@ -955,6 +978,12 @@ impl AuthManager {
     /// `/user` lives on the xAI proxy, so a build pointed elsewhere would send its bearer to the wrong host.
     /// That would happen on every login and every refresh.
     fn spawn_user_info_enrichment(self: &Arc<Self>, auth: GrokAuth) {
+        // ZMY SELF-ADDED CODE START
+        if auth.is_xai_auth() || auth.auth_mode == AuthMode::WebLogin {
+            tracing::debug!("auth: skipped enrichment for official credential");
+            return;
+        }
+        // ZMY SELF-ADDED CODE END
         if !ActiveAuthBackend::default().is_xai_authority() {
             return;
         }
@@ -962,6 +991,11 @@ impl AuthManager {
     }
     /// Blocking `/user` enrichment for login flows that exit before the background task lands.
     pub(crate) async fn enrich_auth_inline(&self, auth: &mut GrokAuth) {
+        // ZMY SELF-ADDED CODE START
+        if auth.is_xai_auth() || auth.auth_mode == AuthMode::WebLogin {
+            return;
+        }
+        // ZMY SELF-ADDED CODE END
         enrichment::enrich_inline(self, auth).await;
     }
     /// Answers only for the account the caller named (an absent email never matches) and fetches only for a Team principal: a User principal gets `null` from `/user` on every call.
@@ -1333,6 +1367,11 @@ impl AuthManager {
         Ok(auth)
     }
     async fn auth_dispatch(self: &Arc<Self>) -> Result<GrokAuth, AuthError> {
+        // ZMY SELF-ADDED CODE START
+        if let Some(error) = self.cached_official_auth_error() {
+            return Err(error);
+        }
+        // ZMY SELF-ADDED CODE END
         let snapshot: Option<GrokAuth> = self.owned_inner();
         let token_type = TokenType::from_auth(snapshot.as_ref());
         tracing::Span::current().record("token_type", tracing::field::debug(token_type));

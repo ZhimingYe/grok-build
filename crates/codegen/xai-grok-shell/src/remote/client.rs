@@ -12,6 +12,13 @@ const GROK_CODE_BACKEND_URL: &str = "https://code.grok.com";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const GROK_CODE_WEB_URL: &str = "https://grok.com";
 
+// ZMY SELF-ADDED CODE START
+fn official_service_error(url: &str) -> Option<BackendError> {
+    xai_grok_env::is_official_service_url(url)
+        .then(|| BackendError::Auth(xai_grok_env::OFFICIAL_SERVICES_DISABLED.to_owned()))
+}
+// ZMY SELF-ADDED CODE END
+
 pub fn share_url(permission_id: &str) -> String {
     let web_url =
         std::env::var("GROK_CODE_WEB_URL").unwrap_or_else(|_| GROK_CODE_WEB_URL.to_string());
@@ -79,6 +86,11 @@ pub async fn fetch_subagent_bundle(
     deployment_key: Option<&str>,
     alpha_test_key: Option<&str>,
 ) -> Result<SubagentBundle, BackendError> {
+    // ZMY SELF-ADDED CODE START
+    if let Some(error) = official_service_error(cli_chat_proxy_base_url) {
+        return Err(error);
+    }
+    // ZMY SELF-ADDED CODE END
     let url = format!("{}/subagents/bundle", cli_chat_proxy_base_url);
     let response = add_bundle_fetch_headers(
         crate::http::shared_client()
@@ -139,6 +151,11 @@ async fn fetch_bundle_inner(
     deployment_key: Option<&str>,
     alpha_test_key: Option<&str>,
 ) -> Result<FetchedBundle, BackendError> {
+    // ZMY SELF-ADDED CODE START
+    if let Some(error) = official_service_error(cli_chat_proxy_base_url) {
+        return Err(error);
+    }
+    // ZMY SELF-ADDED CODE END
     let archive_url = format!("{}/bundle/archive", cli_chat_proxy_base_url);
 
     let raw_client = crate::http::shared_client();
@@ -448,6 +465,11 @@ impl BackendClient {
         &self,
         builder: reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, BackendError> {
+        // ZMY SELF-ADDED CODE START
+        if let Some(error) = official_service_error(&self.base_url) {
+            return Err(error);
+        }
+        // ZMY SELF-ADDED CODE END
         let headers = self.auth_header_map().await?;
         let builder = xai_grok_otel::inject_trace_context_into_request(
             // Per-request timeout so the bound holds on any stored client (the shared_client fallback has no client-level timeout)

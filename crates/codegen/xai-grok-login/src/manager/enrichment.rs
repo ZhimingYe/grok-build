@@ -65,7 +65,9 @@ async fn log_offloaded(lvl: LogLevel, msg: String, ctx: serde_json::Value) {
     }
 }
 async fn fetch_user_info(manager: &AuthManager, key: &str, log_label: &str) -> Option<UserInfo> {
-    let user_url = format!("{}/user", manager.proxy_base_url);
+    // ZMY SELF-ADDED CODE START
+    let user_url = user_info_url_for_proxy(&manager.proxy_base_url)?;
+    // ZMY SELF-ADDED CODE END
     let token_header = &manager.grok_com_config.token_header;
     let started = std::time::Instant::now();
     let http_client = xai_grok_http::shared_client();
@@ -138,6 +140,14 @@ async fn fetch_user_info(manager: &AuthManager, key: &str, log_label: &str) -> O
         }
     }
 }
+// ZMY SELF-ADDED CODE START
+fn user_info_url_for_proxy(proxy_base_url: &str) -> Option<String> {
+    if xai_grok_env::is_official_service_url(proxy_base_url) {
+        return None;
+    }
+    Some(format!("{}/user", proxy_base_url.trim_end_matches('/')))
+}
+// ZMY SELF-ADDED CODE END
 /// Blocking enrichment at login: merges `/user` fields into `auth` before the first save.
 pub(super) async fn enrich_inline(manager: &AuthManager, auth: &mut GrokAuth) {
     let Some(ui) = fetch_user_info(manager, &auth.key, "auth login enrichment").await else {

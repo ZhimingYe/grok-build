@@ -25,7 +25,7 @@ fn fork_withholds_reporting_but_preserves_model_services() {
     for capability in Capability::iter() {
         assert_eq!(
             Distribution::current().allows(capability),
-            !matches!(capability, Capability::Telemetry | Capability::ErrorReporting),
+            matches!(capability, Capability::AccountLogin),
             "{capability:?}"
         );
     }

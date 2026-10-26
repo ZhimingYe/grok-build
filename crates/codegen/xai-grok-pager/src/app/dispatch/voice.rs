@@ -73,10 +73,11 @@ fn open_voice_tier_upsell(app: &mut AppView) -> Vec<Effect> {
         }
         ActiveView::AgentDashboard => {
             if let Some(d) = app.dashboard.as_mut() {
-                d.set_error_toast(&format!(
-                    "/voice requires SuperGrok: upgrade at {}",
-                    super::billing::UPSELL_URL_UPGRADE
-                ));
+                // ZMY SELF-ADDED CODE START
+                d.set_error_toast(
+                    "/voice is unavailable with the configured provider. Choose a provider that supports voice.",
+                );
+                // ZMY SELF-ADDED CODE END
             }
         }
         _ => {}
@@ -102,7 +103,9 @@ pub(super) fn dispatch_enable_voice_mode(app: &mut AppView, from_hold: bool) -> 
     }
     // Tier gate: free / X Basic personal users can't use voice (the server zero-limits these tiers)
     // The Ctrl+Space / F8 keybinding bypasses the slash registry, so this is the enforcement point for it
-    // Show the SuperGrok upsell instead of starting a doomed session (`/voice` itself is separately hidden and upsold via the deny list)
+    // ZMY SELF-ADDED CODE START
+    // Explain the configured provider restriction instead of starting an unsupported session.
+    // ZMY SELF-ADDED CODE END
     if app.is_voice_tier_restricted() {
         return open_voice_tier_upsell(app);
     }

@@ -46,7 +46,13 @@ impl Distribution {
     /// This build's distribution.
     pub const fn current() -> Self {
         // ZMY SELF-ADDED CODE START
-        Self::withholding(&[Capability::Telemetry, Capability::ErrorReporting])
+        Self::withholding(&[
+            Capability::Telemetry,
+            Capability::ErrorReporting,
+            Capability::RemoteFetch,
+            Capability::RemoteControl,
+            Capability::Voice,
+        ])
         // ZMY SELF-ADDED CODE END
     }
     pub const fn allows(self, capability: Capability) -> bool {

@@ -25,6 +25,10 @@ tracing-subscriber = { workspace = true }
 url = { workspace = true }
 xai-dirs = { workspace = true }
 xai-grok-extra-ca = { workspace = true }
+# ZMY SELF-ADDED CODE START
+xai-grok-config = { workspace = true }
+xai-grok-env = { workspace = true }
+# ZMY SELF-ADDED CODE END
 # Sanctioned TTY detach for the capture subprocesses (Linux system recorders,
 # macOS `__mic-capture` self-exec helper) — workspace rule: never spawn a raw
 # `std::process::Command`.

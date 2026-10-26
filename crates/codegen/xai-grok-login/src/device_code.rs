@@ -113,6 +113,11 @@ pub async fn request_device_code(
     scopes: &[String],
     surface: ClientSurface,
 ) -> anyhow::Result<DeviceCode> {
+    // ZMY SELF-ADDED CODE START
+    if xai_grok_env::is_official_service_url(issuer) {
+        anyhow::bail!(xai_grok_env::OFFICIAL_SERVICES_DISABLED);
+    }
+    // ZMY SELF-ADDED CODE END
     let client = xai_grok_http::shared_client();
     let url = format!("{}/oauth2/device/code", issuer.trim_end_matches('/'));
     let scope_str = scopes.join(" ");
@@ -183,6 +188,11 @@ pub async fn complete_device_code_login(
     auth_manager: &Arc<AuthManager>,
     surface: ClientSurface,
 ) -> anyhow::Result<(GrokAuth, bool)> {
+    // ZMY SELF-ADDED CODE START
+    if xai_grok_env::is_official_service_url(issuer) {
+        anyhow::bail!(xai_grok_env::OFFICIAL_SERVICES_DISABLED);
+    }
+    // ZMY SELF-ADDED CODE END
     let client = xai_grok_http::shared_client();
     let token_url = format!("{}/oauth2/token", issuer.trim_end_matches('/'));
     let mut poll_interval = std::time::Duration::from_secs(device_code.interval.max(1) as u64);
@@ -479,6 +489,11 @@ fn validate_verification_uri(uri: &str) -> anyhow::Result<()> {
     let parsed = url::Url::parse(uri)
         .map_err(|_| anyhow::anyhow!("Server returned invalid verification URI"))?;
 
+    // ZMY SELF-ADDED CODE START
+    if xai_grok_env::is_official_service_url(parsed.as_str()) {
+        anyhow::bail!(xai_grok_env::OFFICIAL_SERVICES_DISABLED);
+    }
+    // ZMY SELF-ADDED CODE END
     match parsed.scheme() {
         "https" => Ok(()),
         "http" if matches!(parsed.host_str(), Some("localhost") | Some("127.0.0.1")) => Ok(()),
@@ -501,6 +516,47 @@ pub mod tests {
             err.to_string()
         );
     }
+
+    // ZMY SELF-ADDED CODE START
+    #[tokio::test]
+    async fn fork_official_device_code_issuer_fails_before_request_or_poll() {
+        let request = super::request_device_code(
+            "https://auth.x.ai",
+            "client-id",
+            &[],
+            super::ClientSurface::Cli,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            request
+                .to_string()
+                .contains(xai_grok_env::OFFICIAL_SERVICES_DISABLED)
+        );
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let manager = Arc::new(AuthManager::new(temp_dir.path(), GrokComConfig::default()));
+        let poll = super::complete_device_code_login(
+            "https://auth.x.ai",
+            "client-id",
+            device_code_for_test(30, 900),
+            &manager,
+            super::ClientSurface::Cli,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            poll.to_string()
+                .contains(xai_grok_env::OFFICIAL_SERVICES_DISABLED)
+        );
+        assert!(
+            validate_verification_uri("https://grok.com/device")
+                .unwrap_err()
+                .to_string()
+                .contains(xai_grok_env::OFFICIAL_SERVICES_DISABLED)
+        );
+    }
+    // ZMY SELF-ADDED CODE END
 
     fn auth_manager_with_grok_home(
         grok_home: &std::path::Path,

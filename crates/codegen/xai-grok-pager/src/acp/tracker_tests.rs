@@ -5081,13 +5081,16 @@ fn media_gen_ref_skips_uploaded_only_video() {
         "uploaded_url-only media must not claim a local open path"
     );
 }
-/// A tier-restricted (free / X Basic) imagine call short-circuits with the SuperGrok upsell as `ToolOutput::Text` on a `Completed` status.
-/// The media renderer has no file to open, so it must surface the upsell text in the card body (not a bare title).
+// ZMY SELF-ADDED CODE START
+/// A tier-restricted imagine call short-circuits with provider-neutral `ToolOutput::Text` on a `Completed` status.
+/// The media renderer has no file to open, so it must surface the availability message in the card body (not a bare title).
 /// It must NOT mark the card as an error.
+// ZMY SELF-ADDED CODE END
 #[test]
 fn tier_restricted_media_shows_upsell_text_not_error() {
-    let upsell = "Image generation is a SuperGrok feature. Upgrade at \
-         https://grok.com/supergrok?referrer=grok-build";
+    // ZMY SELF-ADDED CODE START
+    let upsell = "Image generation is unavailable at the configured provider. Configure a provider that supports image generation.";
+    // ZMY SELF-ADDED CODE END
     let output = ToolOutput::Text(xai_grok_tools::types::output::TextOutput::from(upsell));
     let tc = acp::ToolCall::new(
         acp::ToolCallId::new(Arc::from("tier-restricted-img")),

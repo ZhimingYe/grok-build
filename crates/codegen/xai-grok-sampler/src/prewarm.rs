@@ -37,6 +37,9 @@ enum ClaimError {
 #[strum(serialize_all = "snake_case")]
 #[non_exhaustive]
 pub enum PrewarmOutcome {
+    // ZMY SELF-ADDED CODE START
+    Disabled,
+    // ZMY SELF-ADDED CODE END
     SharingDisabled,
     NoOrigin,
     ClientUnavailable,
@@ -67,6 +70,12 @@ pub async fn prewarm_transport(base_url: &str) -> PrewarmReport {
         duration_ms: elapsed_ms_since(started),
         origin,
     };
+    // ZMY SELF-ADDED CODE START
+    if xai_grok_env::is_official_service_url(base_url) {
+        tracing::debug!(%base_url, "sampler transport prewarm disabled for official service");
+        return report(PrewarmOutcome::Disabled, None);
+    }
+    // ZMY SELF-ADDED CODE END
     let Some(origin) = endpoint_origin(base_url) else {
         tracing::debug!(%base_url, "sampler transport prewarm skipped: no dialable origin");
         return report(PrewarmOutcome::NoOrigin, None);

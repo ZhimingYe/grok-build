@@ -437,6 +437,14 @@ pub(super) fn handle_sessions_changed(notif: &acp::ExtNotification, app: &mut Ap
 }
 
 pub(super) fn handle_announcements_update(notif: &acp::ExtNotification, app: &mut AppView) -> bool {
+    // ZMY SELF-ADDED CODE START
+    if !xai_grok_config::Distribution::current().allows(xai_grok_config::Capability::RemoteFetch) {
+        app.announcement = None;
+        app.active_announcements.clear();
+        app.sync_session_announcement_slash_gate();
+        return true;
+    }
+    // ZMY SELF-ADDED CODE END
     let Ok(parsed) =
         serde_json::from_str::<xai_grok_announcements::AnnouncementsRefreshed>(notif.params.get())
     else {
@@ -474,6 +482,15 @@ pub(super) fn apply_announcements_update(
     user_config: Option<&toml::Value>,
     managed_config: Option<&toml::Value>,
 ) {
+    // ZMY SELF-ADDED CODE START
+    if !xai_grok_config::Distribution::current().allows(xai_grok_config::Capability::RemoteFetch) {
+        app.announcement = None;
+        app.active_announcements.clear();
+        app.announcements_last_gen = next_gen;
+        app.sync_session_announcement_slash_gate();
+        return;
+    }
+    // ZMY SELF-ADDED CODE END
     let merged = xai_grok_shell::util::config::resolve_announcements(
         requirements,
         user_config,

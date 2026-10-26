@@ -653,7 +653,15 @@ async fn eager_auth_or_login_fallback(
     Option<serde_json::Value>,
 ) {
     if auth_methods.is_empty() {
-        return (true, None, None, AuthStartMode::Pending, None);
+        // ZMY SELF-ADDED CODE START
+        return (
+            needs_login,
+            login_label,
+            login_method_id,
+            auth_start_mode,
+            None,
+        );
+        // ZMY SELF-ADDED CODE END
     }
     // ZMY SELF-ADDED CODE START
     // Skipping the login screen alone would still start OAuth through eager authenticate.
@@ -831,15 +839,7 @@ mod tests {
             rx.try_recv(),
             Err(tokio::sync::mpsc::error::TryRecvError::Empty)
         ));
-        // Manual login remains available; only automatic startup login is optional.
-        assert_eq!(
-            find_interactive_login_method(&built.methods)
-                .1
-                .unwrap()
-                .0
-                .as_ref(),
-            "grok.com"
-        );
+        assert!(built.methods.is_empty());
     }
 
     #[test]
@@ -856,6 +856,8 @@ mod tests {
             },
             xai_grok_shell::agent::auth_method::AuthMethodsBuildInputs {
                 preferred_method: Some(xai_grok_login::PreferredAuthMethod::Oidc),
+                has_enterprise_oidc: true,
+                enterprise_oidc_issuer: Some("https://sso.example.com"),
                 ..fresh_fork_auth_inputs()
             },
         ] {

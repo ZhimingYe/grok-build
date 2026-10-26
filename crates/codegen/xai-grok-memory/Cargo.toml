@@ -39,6 +39,9 @@ tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time
 tracing = { workspace = true }
 xai-grok-auth = { workspace = true }
 xai-grok-config-types = { workspace = true }
+# ZMY SELF-ADDED CODE START
+xai-grok-env = { workspace = true }
+# ZMY SELF-ADDED CODE END
 xai-grok-http = { workspace = true }
 xai-grok-tools = { workspace = true }
 xai-grok-version = { workspace = true }
