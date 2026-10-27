@@ -556,7 +556,9 @@ pub(super) fn render_version_badge(
     match &mode {
         VersionBadgeMode::Full { .. } => {
             spans.push(Span::styled(
-                "Grok Build  ",
+                // ZMY SELF-ADDED CODE START
+                "lightbuild  ",
+                // ZMY SELF-ADDED CODE END
                 Style::default()
                     .fg(theme.text_primary)
                     .add_modifier(Modifier::BOLD),
@@ -576,7 +578,9 @@ pub(super) fn render_version_badge(
         }
         VersionBadgeMode::HeroInline => {
             spans.push(Span::styled(
-                "Grok Build  ",
+                // ZMY SELF-ADDED CODE START
+                "lightbuild  ",
+                // ZMY SELF-ADDED CODE END
                 Style::default()
                     .fg(theme.text_primary)
                     .add_modifier(Modifier::BOLD),
@@ -793,7 +797,9 @@ pub fn render_welcome(
 
     let mut result = match params.auth_state {
         AuthState::Pending { error } => {
-            let label = params.login_label.unwrap_or("grok.com");
+            // ZMY SELF-ADDED CODE START
+            let label = params.login_label.unwrap_or("configured provider");
+            // ZMY SELF-ADDED CODE END
             let login_text = format!("Login with {}", label);
             let menu = [("l", login_text.as_str()), ("q", "Quit")];
             let msg = error.as_deref().map(|e| (e, theme.accent_error));
@@ -847,7 +853,9 @@ pub fn render_welcome(
                 content_area,
                 buf,
                 Some((
-                    "Grok Build is not yet available for this account.",
+                    // ZMY SELF-ADDED CODE START
+                    "lightbuild is not yet available for this account.",
+                    // ZMY SELF-ADDED CODE END
                     theme.gray_bright,
                 )),
                 &menu,
@@ -1027,7 +1035,9 @@ fn render_welcome_trust(
         Line::default(),
         // Two lines so the warning never clips at narrow / compact widths (a single ~78-char line would truncate "...posing security risks")
         Line::from(Span::styled(
-            "Grok Build may run or modify contents in this directory,",
+            // ZMY SELF-ADDED CODE START
+            "lightbuild may run or modify contents in this directory,",
+            // ZMY SELF-ADDED CODE END
             Style::default().fg(theme.gray),
         ))
         .alignment(Alignment::Center),
@@ -2744,8 +2754,12 @@ mod tests {
                 "badge must not label the product: {rendered:?}"
             );
         }
-        assert!(full.contains("Grok Build"), "full badge: {full:?}");
-        assert!(inline.contains("Grok Build"), "inline badge: {inline:?}");
+        // ZMY SELF-ADDED CODE START
+        assert!(full.contains("lightbuild"), "full badge: {full:?}");
+        assert!(inline.contains("lightbuild"), "inline badge: {inline:?}");
+        assert!(!full.contains("Grok Build"), "full badge: {full:?}");
+        assert!(!inline.contains("Grok Build"), "inline badge: {inline:?}");
+        // ZMY SELF-ADDED CODE END
         assert!(footer.contains("acme"), "footer keeps the team: {footer:?}");
         assert!(
             !footer.ends_with('\u{2502}'),
@@ -2967,6 +2981,10 @@ mod tests {
             let mut params = render_params(&auth, &trust, None);
             params.foreign_resume_hint = Some(&hint);
             let text = render_done_text(&params);
+            // ZMY SELF-ADDED CODE START
+            assert!(text.contains("Welcome to lightbuild!"), "{text}");
+            assert!(!text.contains("/feedback"), "{text}");
+            // ZMY SELF-ADDED CODE END
             assert!(text.contains(&format!("Coming from {label}?")), "{text}");
             assert!(text.contains("2m ago"), "{text}");
             assert!(text.contains("ctrl+u"), "{text}");

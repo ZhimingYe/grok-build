@@ -26,7 +26,9 @@ const LOGO_H_PAD: u16 = 3;
 /// Reserved on top of the announcement text rows so the message never paints over the button.
 const UPGRADE_CTA_ROWS: u16 = 2;
 
-const HERO_SUBTITLE: &str = "Thanks for trying Grok Build, give feedback with /feedback!";
+// ZMY SELF-ADDED CODE START
+const HERO_SUBTITLE: &str = "Welcome to lightbuild!";
+// ZMY SELF-ADDED CODE END
 
 use super::logo::LogoTier;
 use super::{PROMPT_HEIGHT, VERSION_GAP};

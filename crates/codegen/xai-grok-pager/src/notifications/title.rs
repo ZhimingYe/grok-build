@@ -75,7 +75,9 @@ impl TitleManager {
 
         if !has_parts {
             self.composed.clear();
-            self.composed.push_str("grok");
+            // ZMY SELF-ADDED CODE START
+            self.composed.push_str("lightbuild");
+            // ZMY SELF-ADDED CODE END
         }
 
         let result = if self.composed != self.last_title {
@@ -97,9 +99,11 @@ impl TitleManager {
     }
 
     pub fn reset(&mut self) -> String {
-        let esc = build_title_escape("grok");
+        // ZMY SELF-ADDED CODE START
+        let esc = build_title_escape("lightbuild");
         self.last_title.clear();
-        self.last_title.push_str("grok");
+        self.last_title.push_str("lightbuild");
+        // ZMY SELF-ADDED CODE END
         self.spinner_frame = 0;
         self.tick_count = 0;
         esc
@@ -118,7 +122,9 @@ fn write_item(
     match item {
         TitleItem::Grok => {
             push_separator(buf, has_parts);
-            buf.push_str("grok");
+            // ZMY SELF-ADDED CODE START
+            buf.push_str("lightbuild");
+            // ZMY SELF-ADDED CODE END
         }
         TitleItem::Spinner => {
             if !state.is_busy && state.activity.is_none() {
@@ -299,7 +305,9 @@ mod tests {
         let mut mgr = TitleManager::new(&cfg);
         let state = idle_state();
         mgr.update(&state);
-        assert_eq!(mgr.last_title, "grok");
+        // ZMY SELF-ADDED CODE START
+        assert_eq!(mgr.last_title, "lightbuild");
+        // ZMY SELF-ADDED CODE END
     }
 
     #[test]
@@ -311,7 +319,9 @@ mod tests {
             ..idle_state()
         };
         mgr.update(&state);
-        assert_eq!(mgr.last_title, "my project - grok");
+        // ZMY SELF-ADDED CODE START
+        assert_eq!(mgr.last_title, "my project - lightbuild");
+        // ZMY SELF-ADDED CODE END
     }
 
     #[test]
@@ -320,7 +330,9 @@ mod tests {
         let mut mgr = TitleManager::new(&cfg);
         let state = idle_state();
         mgr.update(&state);
-        assert_eq!(mgr.last_title, "grok");
+        // ZMY SELF-ADDED CODE START
+        assert_eq!(mgr.last_title, "lightbuild");
+        // ZMY SELF-ADDED CODE END
     }
 
     #[test]
@@ -332,7 +344,9 @@ mod tests {
             ..idle_state()
         };
         mgr.update(&state);
-        assert_eq!(mgr.last_title, "grok");
+        // ZMY SELF-ADDED CODE START
+        assert_eq!(mgr.last_title, "lightbuild");
+        // ZMY SELF-ADDED CODE END
     }
 
     #[test]
@@ -341,7 +355,9 @@ mod tests {
         let mut mgr = TitleManager::new(&cfg);
 
         mgr.update(&idle_state());
-        assert_eq!(mgr.last_title, "grok");
+        // ZMY SELF-ADDED CODE START
+        assert_eq!(mgr.last_title, "lightbuild");
+        // ZMY SELF-ADDED CODE END
 
         let activity = TurnActivity::Thinking;
         let state = TitleState {
@@ -349,7 +365,9 @@ mod tests {
             ..idle_state()
         };
         mgr.update(&state);
-        assert!(mgr.last_title.contains(" - grok"));
+        // ZMY SELF-ADDED CODE START
+        assert!(mgr.last_title.contains(" - lightbuild"));
+        // ZMY SELF-ADDED CODE END
         let spinner_part: String = mgr.last_title.chars().take(1).collect();
         assert!(
             TITLE_SPINNER.contains(&spinner_part.chars().next().unwrap()),
@@ -511,7 +529,9 @@ mod tests {
         let cfg = config_with_items(vec![TitleItem::Activity, TitleItem::Grok]);
         let mut mgr = TitleManager::new(&cfg);
         mgr.update(&idle_state());
-        assert_eq!(mgr.last_title, "grok");
+        // ZMY SELF-ADDED CODE START
+        assert_eq!(mgr.last_title, "lightbuild");
+        // ZMY SELF-ADDED CODE END
     }
 
     #[test]
@@ -523,7 +543,9 @@ mod tests {
             ..idle_state()
         };
         mgr.update(&state);
-        assert!(mgr.last_title.contains(" - grok"));
+        // ZMY SELF-ADDED CODE START
+        assert!(mgr.last_title.contains(" - lightbuild"));
+        // ZMY SELF-ADDED CODE END
         let spinner_part: String = mgr.last_title.chars().take(1).collect();
         assert!(
             TITLE_SPINNER.contains(&spinner_part.chars().next().unwrap()),
@@ -541,7 +563,9 @@ mod tests {
             ..idle_state()
         };
         mgr.update(&state);
-        assert_eq!(mgr.last_title, "Waiting - grok");
+        // ZMY SELF-ADDED CODE START
+        assert_eq!(mgr.last_title, "Waiting - lightbuild");
+        // ZMY SELF-ADDED CODE END
     }
 
     #[test]
@@ -555,7 +579,9 @@ mod tests {
             ..idle_state()
         };
         mgr.update(&state);
-        assert_eq!(mgr.last_title, "Thinking - grok");
+        // ZMY SELF-ADDED CODE START
+        assert_eq!(mgr.last_title, "Thinking - lightbuild");
+        // ZMY SELF-ADDED CODE END
     }
 
     #[test]
@@ -617,9 +643,11 @@ mod tests {
             ..idle_state()
         };
         mgr.update(&state);
-        assert_eq!(mgr.last_title, "grok");
+        // ZMY SELF-ADDED CODE START
+        assert_eq!(mgr.last_title, "lightbuild");
         mgr.update(&state);
-        assert_eq!(mgr.last_title, "grok");
+        assert_eq!(mgr.last_title, "lightbuild");
+        // ZMY SELF-ADDED CODE END
     }
 
     #[test]
@@ -630,10 +658,14 @@ mod tests {
 
         let first = mgr.update(&state);
         assert!(first.is_some());
-        assert_eq!(mgr.last_title, "grok");
+        // ZMY SELF-ADDED CODE START
+        assert_eq!(mgr.last_title, "lightbuild");
+        // ZMY SELF-ADDED CODE END
 
         assert_eq!(mgr.update(&state), None);
-        assert_eq!(mgr.last_title, "grok");
+        // ZMY SELF-ADDED CODE START
+        assert_eq!(mgr.last_title, "lightbuild");
+        // ZMY SELF-ADDED CODE END
     }
 
     #[test]
@@ -641,7 +673,9 @@ mod tests {
         let cfg = config_with_items(vec![]);
         let mut mgr = TitleManager::new(&cfg);
         mgr.update(&idle_state());
-        assert_eq!(mgr.last_title, "grok");
+        // ZMY SELF-ADDED CODE START
+        assert_eq!(mgr.last_title, "lightbuild");
+        // ZMY SELF-ADDED CODE END
     }
 
     #[test]
@@ -653,7 +687,9 @@ mod tests {
             ..idle_state()
         };
         mgr.update(&state);
-        assert_eq!(mgr.last_title, "grok-3 - grok");
+        // ZMY SELF-ADDED CODE START
+        assert_eq!(mgr.last_title, "grok-3 - lightbuild");
+        // ZMY SELF-ADDED CODE END
     }
 
     #[test]
@@ -661,7 +697,9 @@ mod tests {
         let cfg = config_with_items(vec![TitleItem::Model, TitleItem::Grok]);
         let mut mgr = TitleManager::new(&cfg);
         mgr.update(&idle_state());
-        assert_eq!(mgr.last_title, "grok");
+        // ZMY SELF-ADDED CODE START
+        assert_eq!(mgr.last_title, "lightbuild");
+        // ZMY SELF-ADDED CODE END
     }
 
     #[test]
@@ -673,7 +711,9 @@ mod tests {
             ..idle_state()
         };
         mgr.update(&state);
-        assert_eq!(mgr.last_title, "my-project - grok");
+        // ZMY SELF-ADDED CODE START
+        assert_eq!(mgr.last_title, "my-project - lightbuild");
+        // ZMY SELF-ADDED CODE END
     }
 
     #[test]
@@ -685,7 +725,9 @@ mod tests {
             ..idle_state()
         };
         mgr.update(&state);
-        assert_eq!(mgr.last_title, "42s - grok");
+        // ZMY SELF-ADDED CODE START
+        assert_eq!(mgr.last_title, "42s - lightbuild");
+        // ZMY SELF-ADDED CODE END
     }
 
     #[test]
@@ -697,7 +739,9 @@ mod tests {
             ..idle_state()
         };
         mgr.update(&state);
-        assert_eq!(mgr.last_title, "grok");
+        // ZMY SELF-ADDED CODE START
+        assert_eq!(mgr.last_title, "lightbuild");
+        // ZMY SELF-ADDED CODE END
     }
 
     #[test]
@@ -738,10 +782,14 @@ mod tests {
             ..idle_state()
         };
         mgr.update(&state);
-        assert_ne!(mgr.last_title, "grok");
+        // ZMY SELF-ADDED CODE START
+        assert_ne!(mgr.last_title, "lightbuild");
+        // ZMY SELF-ADDED CODE END
 
         mgr.reset();
-        assert_eq!(mgr.last_title, "grok");
+        // ZMY SELF-ADDED CODE START
+        assert_eq!(mgr.last_title, "lightbuild");
+        // ZMY SELF-ADDED CODE END
         assert_eq!(mgr.spinner_frame, 0);
         assert_eq!(mgr.tick_count, 0);
     }
@@ -772,7 +820,9 @@ mod tests {
 
         // Both should contain the persistent parts.
         for t in [&t1, &t2] {
-            assert!(t.contains("grok"), "title missing 'grok': {t}");
+            // ZMY SELF-ADDED CODE START
+            assert!(t.contains("lightbuild"), "title missing 'lightbuild': {t}");
+            // ZMY SELF-ADDED CODE END
             assert!(t.contains("Responding"), "title missing 'Responding': {t}");
             assert!(t.contains("my-session"), "title missing session name: {t}");
         }
@@ -787,7 +837,9 @@ mod tests {
         let cfg = default_config();
         let mut mgr = TitleManager::new(&cfg);
         mgr.update(&idle_state());
-        assert_eq!(mgr.last_title, "grok");
+        // ZMY SELF-ADDED CODE START
+        assert_eq!(mgr.last_title, "lightbuild");
+        // ZMY SELF-ADDED CODE END
     }
 
     #[test]
@@ -809,10 +861,12 @@ mod tests {
             ..idle_state()
         };
         mgr.update(&state);
+        // ZMY SELF-ADDED CODE START
         assert_eq!(
             mgr.last_title,
-            "Thinking - proj - grok-3 - workspace - grok"
+            "Thinking - proj - grok-3 - workspace - lightbuild"
         );
+        // ZMY SELF-ADDED CODE END
     }
 
     #[test]

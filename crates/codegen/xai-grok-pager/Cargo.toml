@@ -1,7 +1,7 @@
 [package]
 name = "xai-grok-pager"
 # ZMY SELF-ADDED CODE START
-version = "1.0.45+zhimingye.2"
+version = "1.0.45+zhimingye.3"
 # ZMY SELF-ADDED CODE END
 edition.workspace = true
 license = "Apache-2.0"

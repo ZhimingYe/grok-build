@@ -169,7 +169,9 @@ fn a_pending_double_press_replaces_the_version_badge() {
 
     let screen = screen(&buf);
     assert!(screen.contains("press again to quit"), "{screen}");
-    assert!(!screen.contains("Grok Build"), "{screen}");
+    // ZMY SELF-ADDED CODE START
+    assert!(!screen.contains("lightbuild"), "{screen}");
+    // ZMY SELF-ADDED CODE END
 }
 
 /// `Buffer::set_line` ignores a line's alignment, so the centring is done by hand.
