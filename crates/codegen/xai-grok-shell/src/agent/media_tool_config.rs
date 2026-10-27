@@ -94,6 +94,9 @@ pub fn video_gen_config(cfg: &Config, credentials: &MediaToolCredentials) -> Vid
     if zdr_restricted {
         tracing::info!("video_gen zdr-restricted by tools.disable_zdr_incompatible_tools");
     }
+    // ZMY SELF-ADDED CODE START
+    // Resolve base_url before the official-service gate above, not here.
+    // ZMY SELF-ADDED CODE END
     VideoGenConfig::Enabled {
         api_key: credentials.static_bearer.clone(),
         extra_headers: media_headers(cfg, &base_url),

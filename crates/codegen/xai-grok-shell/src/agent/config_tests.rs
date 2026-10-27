@@ -571,19 +571,21 @@ fn fork_aux_resolution_blocks_official_defaults_and_keeps_custom_no_key_catalog(
         "custom-aux".to_string(),
         test_model_entry("custom-model", "http://127.0.0.1:8033/v1", None, None, None),
     );
-    let resolved = resolve_aux_model_sampling_config(
-        "custom-aux",
-        &custom_catalog,
-        &endpoints,
-        Some("session-token"),
-        false,
-        None,
-        None,
-    )
-    .expect("a configured local catalog model needs no API key");
-    assert_eq!(resolved.base_url, "http://127.0.0.1:8033/v1");
-    assert_eq!(resolved.model, "custom-model");
-    assert_eq!(resolved.api_key.as_deref(), Some("session-token"));
+    for session_key in [None, Some("session-token")] {
+        let resolved = resolve_aux_model_sampling_config(
+            "custom-aux",
+            &custom_catalog,
+            &endpoints,
+            session_key,
+            false,
+            None,
+            None,
+        )
+        .expect("a configured local catalog model needs no API key");
+        assert_eq!(resolved.base_url, "http://127.0.0.1:8033/v1");
+        assert_eq!(resolved.model, "custom-model");
+        assert_eq!(resolved.api_key.as_deref(), session_key);
+    }
 }
 // ZMY SELF-ADDED CODE END
 /// Cold cache falls back to the session model, never the xAI proxy; warm cache serves the provider token at the provider endpoint.
