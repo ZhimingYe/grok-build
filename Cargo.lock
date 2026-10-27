@@ -14916,6 +14916,9 @@ dependencies = [
  "tracing",
  "xai-file-utils",
  "xai-grok-http",
+# ZMY SELF-ADDED CODE START
+ "xai-grok-env",
+# ZMY SELF-ADDED CODE END
  "xai-grok-version",
 ]
 

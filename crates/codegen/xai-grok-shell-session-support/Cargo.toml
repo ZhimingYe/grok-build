@@ -14,6 +14,9 @@ tokio = { workspace = true, features = ["sync", "rt", "time", "macros"] }
 tracing = { workspace = true }
 xai-file-utils = { path = "../xai-file-utils", optional = true }
 xai-grok-http = { workspace = true }
+# ZMY SELF-ADDED CODE START
+xai-grok-env = { workspace = true }
+# ZMY SELF-ADDED CODE END
 xai-grok-version = { workspace = true }
 
 [features]

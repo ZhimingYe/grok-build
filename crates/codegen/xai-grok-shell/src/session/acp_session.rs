@@ -510,6 +510,11 @@ fn managed_gateway_error_to_tool_error(
     caller: &str,
 ) -> xai_tool_runtime::ToolError {
     match error {
+        // ZMY SELF-ADDED CODE START
+        crate::session::managed_mcp::ManagedMcpFetchError::OfficialServicesDisabled => {
+            xai_tool_runtime::ToolError::permission_denied(xai_grok_env::OFFICIAL_SERVICES_DISABLED)
+        }
+        // ZMY SELF-ADDED CODE END
         crate::session::managed_mcp::ManagedMcpFetchError::Status { status, message } => {
             let detail = format!("Managed MCP gateway tool call failed: {message}");
             let mut err = if status == reqwest::StatusCode::UNAUTHORIZED {
@@ -607,6 +612,17 @@ mod managed_gateway_error_tests {
         );
         assert_eq!(err.kind, xai_tool_runtime::ToolErrorKind::Unauthorized);
     }
+    // ZMY SELF-ADDED CODE START
+    #[test]
+    fn official_services_disabled_maps_to_permission_denied() {
+        let err = managed_gateway_error_to_tool_error(
+            crate::session::managed_mcp::ManagedMcpFetchError::OfficialServicesDisabled,
+            "use_tool",
+        );
+        assert_eq!(err.kind, xai_tool_runtime::ToolErrorKind::PermissionDenied);
+        assert_eq!(err.detail, xai_grok_env::OFFICIAL_SERVICES_DISABLED);
+    }
+    // ZMY SELF-ADDED CODE END
     #[tokio::test]
     async fn transport_error_maps_to_network_error_without_url() {
         let transport = reqwest::Client::new()

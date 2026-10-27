@@ -54,6 +54,11 @@ impl ApiEmbeddingProvider {
         api_base: String,
         client: reqwest_middleware::ClientWithMiddleware,
     ) -> Option<Self> {
+        // ZMY SELF-ADDED CODE START
+        if xai_grok_env::is_official_service_url(&api_base) {
+            return None;
+        }
+        // ZMY SELF-ADDED CODE END
         let model = config.model.clone().filter(|m| !m.is_empty())?;
         Some(Self::new(api_base, model, config.dimensions, client))
     }
@@ -98,6 +103,11 @@ impl EmbeddingProvider for ApiEmbeddingProvider {
         &self,
         texts: &[&str],
     ) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error>> {
+        // ZMY SELF-ADDED CODE START
+        if xai_grok_env::is_official_service_url(&self.api_base) {
+            return Err(xai_grok_env::OFFICIAL_SERVICES_DISABLED.into());
+        }
+        // ZMY SELF-ADDED CODE END
         if texts.is_empty() {
             return Ok(vec![]);
         }
@@ -275,4 +285,79 @@ mod tests {
         let results = provider.embed_batch(&["test"]).await.unwrap();
         assert_eq!(results.first().map(Vec::len), Some(128));
     }
+
+    // ZMY SELF-ADDED CODE START
+    #[test]
+    fn fork_official_embedding_config_is_unavailable() {
+        let config = xai_grok_config_types::MemoryEmbeddingConfig {
+            model: Some("text-embedding".into()),
+            ..Default::default()
+        };
+        let client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new()).build();
+        assert!(
+            ApiEmbeddingProvider::from_config(&config, "https://api.x.ai/v1".into(), client)
+                .is_none()
+        );
+        assert!(
+            ApiEmbeddingProvider::from_session(
+                &config,
+                "https://api.x.ai/v1".into(),
+                "session-token".into()
+            )
+            .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn fork_direct_official_embedding_provider_refuses_before_request() {
+        let client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new()).build();
+        let provider = ApiEmbeddingProvider::new(
+            "https://api.x.ai/v1".into(),
+            "text-embedding".into(),
+            2,
+            client,
+        );
+        let error = provider
+            .embed_batch(&["no official request"])
+            .await
+            .expect_err("official embedding must be refused locally");
+        assert_eq!(error.to_string(), xai_grok_env::OFFICIAL_SERVICES_DISABLED);
+    }
+
+    #[tokio::test]
+    async fn fork_custom_embedding_provider_returns_mocked_dimensions_and_data() {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let _ = stream.read(&mut request).unwrap();
+            let body = br#"{"data":[{"embedding":[0.25,0.5]}]}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .unwrap();
+            stream.write_all(body).unwrap();
+        });
+        let client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new()).build();
+        let provider = ApiEmbeddingProvider::new(
+            format!("http://{address}"),
+            "local-embedding".into(),
+            2,
+            client,
+        );
+        let embeddings = provider
+            .embed_batch(&["custom provider"])
+            .await
+            .expect("custom embedding endpoint should be reachable");
+        server.join().unwrap();
+        assert_eq!(provider.model_name(), "local-embedding");
+        assert_eq!(provider.dimensions(), 2);
+        assert_eq!(embeddings, vec![vec![0.25, 0.5]]);
+    }
+    // ZMY SELF-ADDED CODE END
 }

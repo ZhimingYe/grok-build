@@ -449,39 +449,42 @@ fn new_from_toml_cfg_restores_web_search_and_session_summary_models() {
         Some("custom-id-model".to_owned())
     );
 }
+// ZMY SELF-ADDED CODE START
 #[test]
-fn hidden_default_web_search_resolution_is_explicit_and_responses_only() {
+fn fork_hidden_default_web_search_resolution_is_disabled() {
     let endpoints = EndpointsConfig::default();
-    let resolved = resolve_web_search_sampling_config(
-        crate::models::default_web_search_model(),
-        &IndexMap::new(),
-        Some("session-token"),
-        false,
-        None,
-        None,
-        &endpoints,
-    )
-    .expect("hidden default web search model should resolve");
-    assert_eq!(resolved.model, crate::models::default_web_search_model());
-    assert_eq!(resolved.base_url, endpoints.proxy_url());
-    assert_eq!(resolved.api_backend, ApiBackend::Responses);
-    assert_eq!(
-        resolved.api_key.as_deref(),
-        Some("session-token"),
-        "hidden default should still use normal credential resolution"
+    assert!(
+        resolve_web_search_sampling_config(
+            crate::models::default_web_search_model(),
+            &IndexMap::new(),
+            Some("session-token"),
+            false,
+            None,
+            None,
+            &endpoints,
+        )
+        .is_none(),
+        "the hidden default must not enable official-service search"
     );
 }
+// ZMY SELF-ADDED CODE END
+// ZMY SELF-ADDED CODE START
 #[test]
-fn finalize_image_describe_sampler_none_uses_active_session_model_not_forced_helper() {
+fn fork_finalize_image_describe_none_keeps_full_active_session_config() {
+    let base_url = "http://127.0.0.1:8033/v1";
     let active = SamplerConfig {
         model: "composer-session-model".into(),
+        base_url: base_url.into(),
+        api_key: Some("local-session-key".into()),
         ..Default::default()
     };
     let (model, cfg) = finalize_image_describe_sampler_config(None, &active, None, Some(3));
     assert_eq!(model, "composer-session-model");
     assert_eq!(cfg.model, "composer-session-model");
-    assert_ne!(cfg.model, "grok-build");
+    assert_eq!(cfg.base_url, base_url);
+    assert_eq!(cfg.api_key.as_deref(), Some("local-session-key"));
 }
+// ZMY SELF-ADDED CODE END
 #[test]
 fn finalize_image_describe_sampler_some_stamps_session_fields() {
     let active = SamplerConfig {
@@ -527,6 +530,62 @@ fn resolve_aux_model_honors_grok_build_override() {
     assert_eq!(resolved.base_url, "https://vendor.example/v1");
     assert_eq!(resolved.api_key.as_deref(), Some("vendor-key"));
 }
+// ZMY SELF-ADDED CODE START
+#[test]
+fn fork_aux_resolution_blocks_official_defaults_and_keeps_custom_no_key_catalog() {
+    let endpoints = EndpointsConfig::default();
+    let mut official_catalog = IndexMap::new();
+    official_catalog.insert(
+        "official-aux".to_string(),
+        test_model_entry("official-model", "https://api.x.ai/v1", None, None, None),
+    );
+    assert!(
+        resolve_aux_model_sampling_config(
+            "official-aux",
+            &official_catalog,
+            &endpoints,
+            Some("session-token"),
+            false,
+            None,
+            None,
+        )
+        .is_none(),
+        "an official catalog URL must be refused even with a session token"
+    );
+    assert!(
+        resolve_aux_model_sampling_config(
+            "unknown-aux",
+            &IndexMap::new(),
+            &endpoints,
+            Some("session-token"),
+            false,
+            None,
+            None,
+        )
+        .is_none(),
+        "an unknown aux model must not synthesize an official proxy sampler"
+    );
+
+    let mut custom_catalog = IndexMap::new();
+    custom_catalog.insert(
+        "custom-aux".to_string(),
+        test_model_entry("custom-model", "http://127.0.0.1:8033/v1", None, None, None),
+    );
+    let resolved = resolve_aux_model_sampling_config(
+        "custom-aux",
+        &custom_catalog,
+        &endpoints,
+        Some("session-token"),
+        false,
+        None,
+        None,
+    )
+    .expect("a configured local catalog model needs no API key");
+    assert_eq!(resolved.base_url, "http://127.0.0.1:8033/v1");
+    assert_eq!(resolved.model, "custom-model");
+    assert_eq!(resolved.api_key.as_deref(), Some("session-token"));
+}
+// ZMY SELF-ADDED CODE END
 /// Cold cache falls back to the session model, never the xAI proxy; warm cache serves the provider token at the provider endpoint.
 #[tokio::test]
 async fn aux_model_with_auth_provider_never_reroutes() {
@@ -856,8 +915,9 @@ fn shell_environment_policy_known_keys_track_the_policy_struct() {
         include_only: _,
     } = ShellEnvironmentPolicyKnownKeys::default();
 }
+// ZMY SELF-ADDED CODE START
 #[test]
-fn web_search_disable_api_key_auth_swaps_first_party_key_for_session() {
+fn fork_web_search_refuses_official_catalog_even_with_session_token() {
     let endpoints = EndpointsConfig::default();
     let mut models = IndexMap::new();
     models.insert(
@@ -870,22 +930,21 @@ fn web_search_disable_api_key_auth_swaps_first_party_key_for_session() {
             None,
         ),
     );
-    let resolved = resolve_web_search_sampling_config(
-        "ws-model",
-        &models,
-        Some("session-token"),
-        true,
-        None,
-        None,
-        &endpoints,
-    )
-    .expect("web search model should resolve");
-    assert_eq!(
-        resolved.api_key.as_deref(),
-        Some("session-token"),
-        "first-party API key must be swapped for the session token when disabled"
+    assert!(
+        resolve_web_search_sampling_config(
+            "ws-model",
+            &models,
+            Some("session-token"),
+            true,
+            None,
+            None,
+            &endpoints,
+        )
+        .is_none(),
+        "official web search must remain disabled despite credentials"
     );
 }
+// ZMY SELF-ADDED CODE END
 #[test]
 fn parses_model_api_key() {
     let raw_config: toml::Value = toml::from_str(

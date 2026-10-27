@@ -191,10 +191,17 @@ impl MvpAgent {
             .current_or_expired()
             .is_some_and(|a| a.is_managed_mcp_eligible())
     }
+    // ZMY SELF-ADDED CODE START
     fn can_fetch_managed_mcp_gateway_tools(&self) -> bool {
-        self.cfg.borrow().managed_mcp_gateway_tools_enabled
+        let cfg = self.cfg.borrow();
+        let enabled = cfg.managed_mcp_gateway_tools_enabled;
+        let proxy_url = cfg.endpoints.proxy_url();
+        drop(cfg);
+        enabled
             && self.has_managed_mcp_auth()
+            && !xai_grok_env::is_official_service_url(&proxy_url)
     }
+    // ZMY SELF-ADDED CODE END
     pub(crate) async fn get_managed_mcp_gateway_tool_catalog(
         &self,
     ) -> Option<crate::session::managed_mcp::GatewayToolCatalog> {
