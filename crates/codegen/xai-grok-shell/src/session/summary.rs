@@ -20,7 +20,9 @@ enum State {
 }
 
 pub(crate) struct SummaryConfig {
-    pub(crate) sampling_client: OaiCompatClient,
+    // ZMY SELF-ADDED CODE START
+    pub(crate) sampling_client: Option<OaiCompatClient>,
+    // ZMY SELF-ADDED CODE END
     pub(crate) model: String,
     /// Channel back to the persistence actor for sequential storage writes.
     /// Weak: a strong sender here would keep the actor's own channel and task alive.
@@ -63,8 +65,14 @@ impl SummaryGenerator {
 
                 // A background task runs the LLM call so the persistence actor keeps processing messages (updates, flushes)
                 tokio::spawn(async move {
-                    let mut title =
-                        generate_session_summary(content.clone(), sampling_client, &model).await;
+                    // ZMY SELF-ADDED CODE START
+                    let mut title = match sampling_client {
+                        Some(client) => {
+                            generate_session_summary(content.clone(), client, &model).await
+                        }
+                        None => String::new(),
+                    };
+                    // ZMY SELF-ADDED CODE END
                     if title.trim().is_empty() {
                         title =
                             crate::session::helpers::session_summary::title_fallback_from_user_text(
@@ -247,7 +255,9 @@ mod tests {
         let sampling_client =
             OaiCompatClient::new(xai_grok_sampler::SamplerConfig::default()).unwrap();
         let mut generator = SummaryGenerator::new(SummaryConfig {
-            sampling_client,
+            // ZMY SELF-ADDED CODE START
+            sampling_client: Some(sampling_client),
+            // ZMY SELF-ADDED CODE END
             model: String::new(),
             persistence_tx: tx.downgrade(),
         });
@@ -259,4 +269,25 @@ mod tests {
         generator.reset();
         assert!(generator.is_idle());
     }
+    // ZMY SELF-ADDED CODE START
+    #[tokio::test]
+    async fn fork_unavailable_summary_client_uses_local_title() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut generator = SummaryGenerator::new(SummaryConfig {
+            sampling_client: None,
+            model: String::new(),
+            persistence_tx: tx.downgrade(),
+        });
+        generator.update("Fix the session startup error".into());
+        let message = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("local title needs no model request")
+            .unwrap();
+        let PersistenceMsg::GeneratedTitle(title) = message else {
+            panic!("expected generated title");
+        };
+        assert_eq!(title, "Fix the session startup error");
+        assert!(!generator.is_idle());
+    }
+    // ZMY SELF-ADDED CODE END
 }

@@ -36,7 +36,9 @@ fn test_actor_inner(
     let sampling_client = OaiCompatClient::new(xai_grok_sampler::SamplerConfig::default()).unwrap();
     let mut summary =
         crate::session::summary::SummaryGenerator::new(crate::session::summary::SummaryConfig {
-            sampling_client,
+            // ZMY SELF-ADDED CODE START
+            sampling_client: Some(sampling_client),
+            // ZMY SELF-ADDED CODE END
             model: String::new(),
             persistence_tx: tx.downgrade(),
         });

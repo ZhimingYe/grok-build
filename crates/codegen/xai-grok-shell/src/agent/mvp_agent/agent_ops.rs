@@ -90,10 +90,11 @@ impl MvpAgent {
             .unwrap_or(crate::models::default_session_summary_model())
             .to_owned()
     }
+    // ZMY SELF-ADDED CODE START
     pub(super) fn build_summary_client(
         &self,
         primary: &SamplingConfig,
-    ) -> Result<(OaiCompatClient, String), acp::Error> {
+    ) -> Result<(Option<OaiCompatClient>, String), acp::Error> {
         let slug = self.resolve_session_summary_model();
         let session_key = self.auth_manager.current_or_expired().map(|a| a.key.clone());
         let models = self.models_manager.models();
@@ -115,7 +116,7 @@ impl MvpAgent {
             alpha_test_key,
             client_version,
         ) {
-            Some(mut cfg) => {
+            Some(mut cfg) if !xai_grok_env::is_official_service_url(&cfg.base_url) => {
                 crate::agent::config::stamp_session_local_sampler_fields(
                     &mut cfg,
                     primary,
@@ -124,16 +125,18 @@ impl MvpAgent {
                 );
                 cfg
             }
-            None => {
-                let mut fallback = primary.clone();
-                fallback.model = slug;
-                fallback
-            }
+            // An unavailable auxiliary model must not route a custom provider to a Grok model.
+            _ => primary.clone(),
         };
         let model = config.model.clone();
+        // Local persistence must work even before a nonofficial model is configured.
+        if xai_grok_env::is_official_service_url(&config.base_url) {
+            return Ok((None, model));
+        }
         let client = OaiCompatClient::new(config).map_err(map_sampling_err_to_acp)?;
-        Ok((client, model))
+        Ok((Some(client), model))
     }
+    // ZMY SELF-ADDED CODE END
     fn has_proxy_credentials(&self) -> bool {
         self.cfg.borrow().endpoints.deployment_key.is_some()
             || self.auth_manager.current_or_expired().is_some_and(|a| a.is_xai_auth())
