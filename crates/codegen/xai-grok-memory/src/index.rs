@@ -239,6 +239,7 @@ impl MemoryIndex {
                     transaction.execute("DROP TABLE IF EXISTS chunks_vec", [])?;
                 }
                 transaction.execute_batch(&schema::schema_sql(dimensions, true))?;
+                Self::purge_invalidated_embeddings(&transaction)?;
                 transaction.execute(
                     schema::UPSERT_META_SQL,
                     params!["embedding_dimensions", dimensions.to_string()],
@@ -378,13 +379,10 @@ impl MemoryIndex {
                             params![rid, chunk.text],
                         )?;
                     }
-                    // Delete stale embedding (will be re-embedded later)
-                    if self.vec_available {
-                        let _ = tx.execute(
-                            "DELETE FROM chunks_vec WHERE chunk_id = ?1",
-                            params![chunk_id],
-                        );
-                    }
+                    // ZMY SELF-ADDED CODE START
+                    // Persist tombstones so failed vector deletes can be retried after recovery.
+                    Self::invalidate_embedding(&tx, &chunk_id, self.vec_available)?;
+                    // ZMY SELF-ADDED CODE END
                     result.updated += 1;
                 }
                 None => {
@@ -421,12 +419,10 @@ impl MemoryIndex {
                     "INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES('delete', ?1, ?2)",
                     params![old_record.rowid, old_record.text],
                 )?;
-                if self.vec_available {
-                    let _ = tx.execute(
-                        "DELETE FROM chunks_vec WHERE chunk_id = ?1",
-                        params![old_id],
-                    );
-                }
+                // ZMY SELF-ADDED CODE START
+                // Persist tombstones so failed vector deletes can be retried after recovery.
+                Self::invalidate_embedding(&tx, old_id, self.vec_available)?;
+                // ZMY SELF-ADDED CODE END
                 tx.execute("DELETE FROM chunks WHERE id = ?1", params![old_id])?;
                 result.removed += 1;
             }
@@ -442,6 +438,7 @@ impl MemoryIndex {
 
     // ZMY SELF-ADDED CODE START
     /// FTS5 keyword search with a bounded literal fallback for non-tokenized text.
+    // Merge substring matches so FTS hits cannot hide valid literal matches.
     pub fn search_fts_by_sources(
         &self,
         query: &str,
@@ -566,48 +563,81 @@ impl MemoryIndex {
         sources: Option<&[&str]>,
         rank: f64,
     ) -> Result<Vec<FtsResult>, rusqlite::Error> {
-        let literal = query.trim();
-        let char_count = literal.chars().count();
-        if literal.is_empty()
-            || char_count > 1024
-            || !literal.chars().any(char::is_alphanumeric)
-            || (char_count == 1
-                && !literal
-                    .chars()
-                    .any(|character| !character.is_ascii() && character.is_alphanumeric()))
-        {
+        let valid_literal = |literal: &str| {
+            let char_count = literal.chars().take(1025).count();
+            char_count > 0
+                && char_count <= 1024
+                && literal.chars().any(char::is_alphanumeric)
+                && (char_count > 1
+                    || literal
+                        .chars()
+                        .any(|c| !c.is_ascii() && c.is_alphanumeric()))
+        };
+        let phrase = query.trim();
+        let has_phrase = valid_literal(phrase);
+        let mut literals = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        if has_phrase {
+            literals.push(phrase);
+            seen.insert(phrase.to_lowercase());
+        }
+        // Whitespace/list separators delimit keywords, not technical symbols such as C++.
+        for term in query.split(|c: char| c.is_whitespace() || "，。；、,;".contains(c)) {
+            let term = term.trim_matches(|c: char| "\"'()[]{}!?！？".contains(c));
+            if valid_literal(term)
+                && (Self::needs_literal_fallback(term) || term.chars().all(|c| c.is_ascii_digit()))
+                && seen.insert(term.to_lowercase())
+            {
+                literals.push(term);
+                if literals.len() >= 64 {
+                    break;
+                }
+            }
+        }
+        if literals.is_empty() {
             return Ok(vec![]);
         }
 
-        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> =
-            vec![Box::new(literal.to_owned()), Box::new(limit as i64)];
-        let sql = if let Some(sources) = sources {
-            let placeholders: Vec<String> = sources
-                .iter()
-                .enumerate()
-                .map(|(i, _)| format!("?{}", i + 3))
-                .collect();
+        let predicates: Vec<String> = (1..=literals.len())
+            .map(|i| format!("instr(lower(c.text), lower(?{i})) > 0"))
+            .collect();
+        let phrase_predicate = if has_phrase {
+            "instr(lower(c.text), lower(?1)) > 0"
+        } else {
+            "0"
+        };
+        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = literals
+            .into_iter()
+            .map(|literal| Box::new(literal.to_owned()) as Box<dyn rusqlite::types::ToSql>)
+            .collect();
+        params_vec.push(Box::new(limit as i64));
+        let limit_parameter = params_vec.len();
+        let mut source_filter = String::new();
+        if let Some(sources) = sources {
+            let mut placeholders = Vec::new();
             for source in sources {
                 params_vec.push(Box::new(source.to_string()));
+                placeholders.push(format!("?{}", params_vec.len()));
             }
-            format!(
-                "SELECT c.rowid FROM chunks c \
-                 WHERE instr(lower(c.text), lower(?1)) > 0 AND c.source IN ({}) \
-                 ORDER BY c.created_at DESC, c.path ASC, c.id ASC LIMIT ?2",
-                placeholders.join(", ")
-            )
-        } else {
-            "SELECT c.rowid FROM chunks c \
-             WHERE instr(lower(c.text), lower(?1)) > 0 \
-             ORDER BY c.created_at DESC, c.path ASC, c.id ASC LIMIT ?2"
-                .to_owned()
-        };
+            source_filter = format!(" AND c.source IN ({})", placeholders.join(", "));
+        }
+        let sql = format!(
+            "SELECT c.rowid, ({phrase_predicate}) AS phrase_match FROM chunks c \
+             WHERE ({}){source_filter} \
+             ORDER BY phrase_match DESC, c.created_at DESC, c.path ASC, c.id ASC \
+             LIMIT ?{limit_parameter}",
+            predicates.join(" OR ")
+        );
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             params_vec.iter().map(|param| param.as_ref()).collect();
         let mut stmt = self.db.prepare(&sql)?;
         let rows = stmt
             .query_map(param_refs.as_slice(), |row| {
-                Ok((row.get::<_, i64>(0)?, rank))
+                let phrase_match = row.get::<_, bool>(1)?;
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    if phrase_match { rank - 1.0 } else { rank },
+                ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         self.resolve_fts_rowids(rows)
@@ -706,6 +736,9 @@ impl MemoryIndex {
         if !self.vec_available {
             return Ok(vec![]);
         }
+        // ZMY SELF-ADDED CODE START
+        self.clear_invalidated_embeddings()?;
+        // ZMY SELF-ADDED CODE END
         let mut stmt = self.db.prepare(
             "SELECT c.id, c.text FROM chunks c \
              LEFT JOIN chunks_vec_rowids v ON v.id = c.id \
@@ -728,6 +761,9 @@ impl MemoryIndex {
         if !self.vec_available {
             return Ok(());
         }
+        // ZMY SELF-ADDED CODE START
+        self.clear_invalidated_embeddings()?;
+        // ZMY SELF-ADDED CODE END
         let embedding_bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
         self.db.execute(
             "INSERT OR REPLACE INTO chunks_vec(chunk_id, embedding) VALUES (?1, ?2)",
@@ -745,6 +781,9 @@ impl MemoryIndex {
         if !self.vec_available {
             return Ok(vec![]);
         }
+        // ZMY SELF-ADDED CODE START
+        self.clear_invalidated_embeddings()?;
+        // ZMY SELF-ADDED CODE END
         let span = tracing::info_span!(
             "memory.vector_search",
             candidate_count = tracing::field::Empty
@@ -829,12 +868,10 @@ impl MemoryIndex {
                 "INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES('delete', ?1, ?2)",
                 params![record.rowid, record.text],
             )?;
-            if self.vec_available {
-                let _ = tx.execute(
-                    "DELETE FROM chunks_vec WHERE chunk_id = ?1",
-                    params![chunk_id],
-                );
-            }
+            // ZMY SELF-ADDED CODE START
+            // Persist tombstones so failed vector deletes can be retried after recovery.
+            Self::invalidate_embedding(&tx, chunk_id, self.vec_available)?;
+            // ZMY SELF-ADDED CODE END
             tx.execute("DELETE FROM chunks WHERE id = ?1", params![chunk_id])?;
         }
         tx.commit()?;
@@ -846,6 +883,61 @@ impl MemoryIndex {
         );
         Ok(existing.len())
     }
+
+    // ZMY SELF-ADDED CODE START
+    fn invalidate_embedding(
+        transaction: &rusqlite::Transaction<'_>,
+        chunk_id: &str,
+        vec_available: bool,
+    ) -> Result<(), rusqlite::Error> {
+        transaction.execute(
+            "INSERT OR IGNORE INTO embedding_invalidations(chunk_id) VALUES (?1)",
+            params![chunk_id],
+        )?;
+        if vec_available
+            && transaction
+                .execute(
+                    "DELETE FROM chunks_vec WHERE chunk_id = ?1",
+                    params![chunk_id],
+                )
+                .is_ok()
+        {
+            transaction.execute(
+                "DELETE FROM embedding_invalidations WHERE chunk_id = ?1",
+                params![chunk_id],
+            )?;
+        }
+        Ok(())
+    }
+
+    fn purge_invalidated_embeddings(
+        transaction: &rusqlite::Transaction<'_>,
+    ) -> Result<(), rusqlite::Error> {
+        let mut stmt = transaction.prepare("SELECT chunk_id FROM embedding_invalidations")?;
+        let ids = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        for id in ids {
+            transaction.execute("DELETE FROM chunks_vec WHERE chunk_id = ?1", params![id])?;
+        }
+        transaction.execute("DELETE FROM embedding_invalidations", [])?;
+        Ok(())
+    }
+
+    fn clear_invalidated_embeddings(&self) -> Result<(), rusqlite::Error> {
+        let pending: bool = self.db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM embedding_invalidations)",
+            [],
+            |row| row.get(0),
+        )?;
+        if pending {
+            let transaction = self.db.unchecked_transaction()?;
+            Self::purge_invalidated_embeddings(&transaction)?;
+            transaction.commit()?;
+        }
+        Ok(())
+    }
+    // ZMY SELF-ADDED CODE END
 
     /// Get all existing chunks for a path, keyed by chunk ID.
     ///
@@ -1517,6 +1609,168 @@ mod tests {
         );
     }
     // ZMY SELF-ADDED CODE START
+    #[test]
+    fn fork_lexical_search_recalls_separate_chinese_keywords() {
+        let tmp = TempDir::new().unwrap();
+        let mut index = MemoryIndex::initialize_fts_only(
+            rusqlite::Connection::open_in_memory().unwrap(),
+            test_storage(&tmp),
+            MemoryIndexConfig::default(),
+            4,
+        )
+        .unwrap();
+        let separated = tmp.path().join("a-separated.md");
+        let phrase = tmp.path().join("z-phrase.md");
+        let global = tmp.path().join("global.md");
+        index
+            .reindex_content(
+                &separated,
+                "workspace",
+                "部署要求兼容旧系统，服务端口使用8080。",
+            )
+            .unwrap();
+        index
+            .reindex_content(&phrase, "workspace", "部署 端口")
+            .unwrap();
+        index
+            .reindex_content(&global, "global", "服务端口使用9090。")
+            .unwrap();
+        let separated_id = format!("{}:0", separated.display());
+        let phrase_id = format!("{}:0", phrase.display());
+        let global_id = format!("{}:0", global.display());
+
+        for query in ["部署 端口", "部署，端口", "C++ 端口"] {
+            let results = index.search_fts(query, 10).unwrap();
+            assert!(
+                results.iter().any(|r| r.chunk_id == separated_id),
+                "{query}"
+            );
+            assert!(
+                results.iter().any(|r| r.chunk_id == global_id),
+                "OR semantics: {query}"
+            );
+            let scoped = index
+                .search_fts_by_sources(query, 10, &["workspace"])
+                .unwrap();
+            assert!(scoped.iter().any(|r| r.chunk_id == separated_id));
+            assert!(scoped.iter().all(|r| r.chunk_id != global_id));
+        }
+        assert_eq!(
+            index.search_fts("部署 端口", 1).unwrap()[0].chunk_id,
+            phrase_id
+        );
+        assert_eq!(
+            index
+                .search_fts_by_sources("部署 端口", 1, &["workspace"])
+                .unwrap()[0]
+                .chunk_id,
+            phrase_id
+        );
+        let limited = index.search_fts("部署 端口 部署", 2).unwrap();
+        assert_eq!(limited.len(), 2);
+        assert_ne!(limited[0].chunk_id, limited[1].chunk_id);
+        let long_query = format!("{} 部署 端口", "context ".repeat(150));
+        assert!(
+            index
+                .search_fts(&long_query, 10)
+                .unwrap()
+                .iter()
+                .any(|r| r.chunk_id == separated_id)
+        );
+        assert!(
+            index
+                .search_fts_by_sources("部署 端口", 10, &[])
+                .unwrap()
+                .is_empty()
+        );
+        assert!(index.search_fts("部署 端口", 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn fork_vector_invalidation_survives_failed_initialization_and_recovery() {
+        init_sqlite_vec();
+        for action in ["edit", "truncate", "delete", "recreate"] {
+            for reopen in [false, true] {
+                let tmp = TempDir::new().unwrap();
+                let db_path = tmp.path().join("test.sqlite");
+                let open = |dimensions| {
+                    MemoryIndex::open_or_create(
+                        &db_path,
+                        test_storage(&tmp),
+                        MemoryIndexConfig::default(),
+                        dimensions,
+                    )
+                    .unwrap()
+                };
+                let path = tmp.path().join("edited.md");
+                let untouched = tmp.path().join("untouched.md");
+                let id = format!("{}:0", path.display());
+                let untouched_id = format!("{}:0", untouched.display());
+                let mut healthy = open(4);
+                healthy
+                    .reindex_content(&path, "workspace", "oldcachetext")
+                    .unwrap();
+                healthy
+                    .reindex_content(&untouched, "workspace", "stabletext")
+                    .unwrap();
+                healthy.upsert_embedding(&id, &[0.1; 4]).unwrap();
+                healthy.upsert_embedding(&untouched_id, &[0.2; 4]).unwrap();
+
+                let mut fallback = open(999999);
+                assert!(!fallback.vec_available());
+                match action {
+                    "edit" => {
+                        fallback
+                            .reindex_content(&path, "workspace", "newcachetext")
+                            .unwrap();
+                    }
+                    "truncate" => {
+                        fallback.reindex_content(&path, "workspace", "").unwrap();
+                    }
+                    "delete" | "recreate" => {
+                        fallback.delete_path(&path).unwrap();
+                    }
+                    _ => unreachable!(),
+                }
+                if action == "recreate" {
+                    fallback
+                        .reindex_content(&path, "workspace", "newcachetext")
+                        .unwrap();
+                }
+                let has_text = action == "edit" || action == "recreate";
+                assert_eq!(
+                    fallback.search_fts("newcachetext", 10).unwrap().len(),
+                    usize::from(has_text)
+                );
+                drop(fallback);
+
+                if reopen {
+                    drop(healthy);
+                    healthy = open(4);
+                }
+                // An already-open vector connection must also observe the invalidation.
+                let vectors = healthy.vector_search(&[0.1; 4], 10).unwrap();
+                assert!(
+                    vectors.iter().all(|(chunk_id, _)| chunk_id != &id),
+                    "{action}, reopen={reopen}"
+                );
+                assert!(
+                    vectors
+                        .iter()
+                        .any(|(chunk_id, _)| chunk_id == &untouched_id)
+                );
+                let pending = healthy.chunks_without_embeddings().unwrap();
+                assert_eq!(pending.len(), usize::from(has_text));
+                if has_text {
+                    assert_eq!(pending[0], (id.clone(), "newcachetext".to_owned()));
+                    healthy.upsert_embedding(&id, &[0.8; 4]).unwrap();
+                    assert!(healthy.chunks_without_embeddings().unwrap().is_empty());
+                    assert_eq!(healthy.vector_search(&[0.8; 4], 1).unwrap()[0], (id, 0.0));
+                }
+            }
+        }
+    }
+
     #[test]
     fn fork_failed_vector_migration_keeps_fts_and_old_cache() {
         init_sqlite_vec();
