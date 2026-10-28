@@ -179,12 +179,15 @@ async fn build_embedding_provider(
     }
 
     if credentials_approved && let Some(creds) = credentials.auth_credentials() {
+        // ZMY SELF-ADDED CODE START
         let client = super::embedding::build_middleware_client(creds.clone());
-        return super::embedding::ApiEmbeddingProvider::from_config(
+        return super::embedding::ApiEmbeddingProvider::from_config_with_credentials(
             config,
             base_url.to_owned(),
             client,
+            creds.clone(),
         );
+        // ZMY SELF-ADDED CODE END
     }
 
     let per_call_key = if credentials_approved && let Some(p) = credentials.api_key_provider() {

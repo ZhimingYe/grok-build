@@ -441,18 +441,18 @@ impl MemoryIndex {
     // -----------------------------------------------------------------------
 
     // ZMY SELF-ADDED CODE START
-    /// FTS5 keyword search with a bounded literal fallback when FTS has no hits.
+    /// FTS5 keyword search with a bounded literal fallback for non-tokenized text.
     pub fn search_fts_by_sources(
         &self,
         query: &str,
         limit: usize,
         sources: &[&str],
     ) -> Result<Vec<FtsResult>, rusqlite::Error> {
-        if sources.is_empty() || limit == 0 {
+        if sources.is_empty() || limit == 0 || query.chars().count() > 1024 {
             return Ok(vec![]);
         }
         let fts_query = super::query_expansion::lexical_search_query(query);
-        if !fts_query.is_empty() {
+        let fts_results = if !fts_query.is_empty() {
             let _g = tracing::info_span!("memory.fts_search").entered();
             let placeholders: Vec<String> = sources
                 .iter()
@@ -480,21 +480,28 @@ impl MemoryIndex {
                     Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?))
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
-            let results = self.resolve_fts_rowids(rows)?;
-            if !results.is_empty() {
-                return Ok(results);
+            self.resolve_fts_rowids(rows)?
+        } else {
+            vec![]
+        };
+        if fts_results.is_empty() || Self::needs_literal_fallback(query) {
+            let literal_rank = Self::literal_rank(&fts_results);
+            let literal_results =
+                self.search_fts_substring(query, limit, Some(sources), literal_rank)?;
+            if !literal_results.is_empty() {
+                return Ok(Self::merge_fts_results(literal_results, fts_results, limit));
             }
         }
-        self.search_fts_substring(query, limit, Some(sources))
+        Ok(fts_results)
     }
 
     pub fn search_fts(&self, query: &str, limit: usize) -> Result<Vec<FtsResult>, rusqlite::Error> {
-        if limit == 0 {
+        if limit == 0 || query.chars().count() > 1024 {
             return Ok(vec![]);
         }
 
         let fts_query = super::query_expansion::lexical_search_query(query);
-        if !fts_query.is_empty() {
+        let fts_results = if !fts_query.is_empty() {
             let _g = tracing::info_span!("memory.fts_search").entered();
             let mut stmt = self.db.prepare(
                 "SELECT rowid, rank FROM chunks_fts WHERE chunks_fts MATCH ?1 \
@@ -505,12 +512,51 @@ impl MemoryIndex {
                     Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?))
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
-            let results = self.resolve_fts_rowids(rows)?;
-            if !results.is_empty() {
-                return Ok(results);
+            self.resolve_fts_rowids(rows)?
+        } else {
+            vec![]
+        };
+        if fts_results.is_empty() || Self::needs_literal_fallback(query) {
+            let literal_rank = Self::literal_rank(&fts_results);
+            let literal_results = self.search_fts_substring(query, limit, None, literal_rank)?;
+            if !literal_results.is_empty() {
+                return Ok(Self::merge_fts_results(literal_results, fts_results, limit));
             }
         }
-        self.search_fts_substring(query, limit, None)
+        Ok(fts_results)
+    }
+
+    fn needs_literal_fallback(query: &str) -> bool {
+        query.chars().any(|character| {
+            (!character.is_ascii() && character.is_alphanumeric())
+                || character.is_ascii_punctuation()
+        })
+    }
+
+    fn literal_rank(fts_results: &[FtsResult]) -> f64 {
+        fts_results
+            .iter()
+            .map(|result| result.rank)
+            .min_by(f64::total_cmp)
+            .map_or(-1.0e-6, |rank| rank - 1.0)
+    }
+
+    fn merge_fts_results(
+        literal_results: Vec<FtsResult>,
+        fts_results: Vec<FtsResult>,
+        limit: usize,
+    ) -> Vec<FtsResult> {
+        let mut seen = std::collections::HashSet::with_capacity(limit);
+        let mut merged = Vec::with_capacity(limit.min(literal_results.len() + fts_results.len()));
+        for result in literal_results.into_iter().chain(fts_results) {
+            if seen.insert(result.chunk_id.clone()) {
+                merged.push(result);
+                if merged.len() == limit {
+                    break;
+                }
+            }
+        }
+        merged
     }
 
     fn search_fts_substring(
@@ -518,13 +564,17 @@ impl MemoryIndex {
         query: &str,
         limit: usize,
         sources: Option<&[&str]>,
+        rank: f64,
     ) -> Result<Vec<FtsResult>, rusqlite::Error> {
         let literal = query.trim();
         let char_count = literal.chars().count();
         if literal.is_empty()
             || char_count > 1024
             || !literal.chars().any(char::is_alphanumeric)
-            || char_count == 1
+            || (char_count == 1
+                && !literal
+                    .chars()
+                    .any(|character| !character.is_ascii() && character.is_alphanumeric()))
         {
             return Ok(vec![]);
         }
@@ -557,7 +607,7 @@ impl MemoryIndex {
         let mut stmt = self.db.prepare(&sql)?;
         let rows = stmt
             .query_map(param_refs.as_slice(), |row| {
-                Ok((row.get::<_, i64>(0)?, -1.0e-6))
+                Ok((row.get::<_, i64>(0)?, rank))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         self.resolve_fts_rowids(rows)
@@ -1817,14 +1867,16 @@ mod tests {
         let workspace = tmp.path().join("workspace.md");
         let global = tmp.path().join("global.md");
         let technical = tmp.path().join("technical.md");
+        let plain_c = tmp.path().join("plain-c.md");
         let literal = tmp.path().join("literal.md");
-        std::fs::write(&workspace, "# 部署要求\n\n部署要求必须兼容旧系统。").unwrap();
-        std::fs::write(&global, "# 部署\n\n部署要求必须兼容旧系统。").unwrap();
+        std::fs::write(&workspace, "# 部署\n\n部署").unwrap();
+        std::fs::write(&global, "# Chinese requirement\n\n部署要求兼容旧系统。").unwrap();
         std::fs::write(
             &technical,
             "# Listener\n\nThe listener uses port 8080 and a C++ service.",
         )
         .unwrap();
+        std::fs::write(&plain_c, "# C service\n\nA plain C service.").unwrap();
         std::fs::write(
             &literal,
             "# Literal query\n\nThe exact input is \"the OR a++\"; payload %' OR 1=1 --.",
@@ -1833,30 +1885,38 @@ mod tests {
         index.reindex_file(&workspace, "workspace").unwrap();
         index.reindex_file(&global, "global").unwrap();
         index.reindex_file(&technical, "workspace").unwrap();
+        index.reindex_file(&plain_c, "workspace").unwrap();
         index.reindex_file(&literal, "workspace").unwrap();
 
-        let chinese = index.search_fts("要求必须兼容", 10).unwrap();
+        let chinese = index.search_fts("部署", 10).unwrap();
+        assert_eq!(chinese.len(), 2);
         assert!(chinese.iter().any(|result| {
             result
                 .chunk_id
                 .starts_with(workspace.to_string_lossy().as_ref())
         }));
         let workspace_results = index
-            .search_fts_by_sources("要求必须兼容", 10, &["workspace"])
+            .search_fts_by_sources("部署", 10, &["workspace"])
             .unwrap();
         assert_eq!(workspace_results.len(), 1);
         assert_eq!(
             workspace_results[0].chunk_id,
             format!("{}:0", workspace.to_string_lossy())
         );
+        let global_results = index
+            .search_fts_by_sources("部署", 10, &["global"])
+            .unwrap();
+        assert_eq!(global_results.len(), 1);
+        assert!(global_results.iter().all(|result| {
+            result
+                .chunk_id
+                .starts_with(global.to_string_lossy().as_ref())
+        }));
+        let chinese_single = index.search_fts("署", 10).unwrap();
         assert!(
-            index
-                .search_fts_by_sources("要求必须兼容", 10, &["global"])
-                .unwrap()
+            chinese_single
                 .iter()
-                .all(|result| result
-                    .chunk_id
-                    .starts_with(global.to_string_lossy().as_ref()))
+                .any(|result| result.chunk_id == format!("{}:0", global.to_string_lossy()))
         );
 
         let port = index.search_fts("8080", 10).unwrap();
@@ -1868,6 +1928,10 @@ mod tests {
         assert!(
             cpp.iter()
                 .any(|result| result.chunk_id == format!("{}:0", technical.to_string_lossy()))
+        );
+        assert_eq!(
+            index.search_fts("C++", 1).unwrap()[0].chunk_id,
+            format!("{}:0", technical.to_string_lossy())
         );
 
         let operator = index.search_fts("\"the OR a++\"", 10).unwrap();
