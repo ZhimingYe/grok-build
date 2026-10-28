@@ -1016,6 +1016,24 @@ mod factory_tests {
             ),
             (
                 Some(MemoryEmbeddingConfig {
+                    provider: "none".to_owned(),
+                    model: Some("stale-model".to_owned()),
+                    dimensions: 4,
+                }),
+                local_url.clone(),
+                Some("stale-key".to_owned()),
+            ),
+            (
+                Some(MemoryEmbeddingConfig {
+                    provider: "api".to_owned(),
+                    model: Some("configured".to_owned()),
+                    dimensions: 0,
+                }),
+                local_url.clone(),
+                Some("stale-key".to_owned()),
+            ),
+            (
+                Some(MemoryEmbeddingConfig {
                     model: Some("configured".to_owned()),
                     ..Default::default()
                 }),

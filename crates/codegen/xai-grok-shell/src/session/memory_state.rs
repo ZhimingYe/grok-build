@@ -436,14 +436,36 @@ impl SessionMemory {
         let Some(storage) = self.storage.borrow().clone() else {
             return;
         };
-        if let Some(mut index) = self.open_index(&storage) {
+        // ZMY SELF-ADDED CODE START
+        // Replace the lexical-only open so configured vector writes use the provider's dimensions.
+        if !self.uses_legacy_pipeline() {
+            return;
+        }
+        let provider = if let Some(params) = self.backend_params.as_ref() {
+            params.make_embedding_provider().await
+        } else {
+            None
+        };
+        let open_index = if let Some(provider) = provider.as_ref() {
+            crate::session::memory::MemoryIndex::open_or_create(
+                &storage.workspace_dir().join("index.sqlite"),
+                storage.clone(),
+                Default::default(),
+                xai_grok_memory::embedding::EmbeddingProvider::dimensions(provider),
+            )
+            .ok()
+        } else {
+            self.open_index(&storage)
+        };
+        if let Some(mut index) = open_index {
             let _ = index.reindex_file(path, source);
-            if let Some(ref params) = self.backend_params
-                && let Some(provider) = params.make_embedding_provider().await
+            if index.vec_available()
+                && let Some(provider) = provider.as_ref()
             {
-                crate::session::memory::embed_missing_chunks(&index, &provider).await;
+                crate::session::memory::embed_missing_chunks(&index, provider).await;
             }
         }
+        // ZMY SELF-ADDED CODE END
     }
 
     /// Remove chunks for the given file paths from the search index.

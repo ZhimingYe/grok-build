@@ -144,13 +144,45 @@ impl MemoryIndex {
             None
         };
         // ZMY SELF-ADDED CODE START
+        let fallback_dimensions = fallback_dimensions.max(1);
         let dimensions = stored_dimensions
+            .as_deref()
             .and_then(|value| value.parse::<usize>().ok())
-            .filter(|dimensions| *dimensions > 0)
-            .unwrap_or(fallback_dimensions.max(1));
+            .filter(|dimensions| *dimensions > 0);
+        let has_vec_table = db.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'chunks_vec'
+             )",
+            [],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if (stored_dimensions.is_some() && dimensions.is_none())
+            || (stored_dimensions.is_none() && has_vec_table)
+        {
+            return Self::initialize_fts_only(db, storage, config, fallback_dimensions);
+        }
+        let dimensions = dimensions.unwrap_or(fallback_dimensions);
         // ZMY SELF-ADDED CODE END
         Self::initialize(db, storage, config, dimensions)
     }
+
+    // ZMY SELF-ADDED CODE START
+    fn initialize_fts_only(
+        db: rusqlite::Connection,
+        storage: MemoryStorage,
+        config: MemoryIndexConfig,
+        dimensions: usize,
+    ) -> Result<Self, rusqlite::Error> {
+        db.execute_batch(&schema::schema_sql(dimensions, false))?;
+        Ok(Self {
+            db,
+            storage,
+            chunk_config: config,
+            vec_available: false,
+            embedding_dimensions: dimensions,
+        })
+    }
+    // ZMY SELF-ADDED CODE END
 
     /// Open with an explicit journal mode. Tests use it to exercise the network-filesystem decision on a local disk.
     fn open_or_create_with_journal_mode(
@@ -1449,33 +1481,123 @@ mod tests {
     #[test]
     fn fork_invalid_dimensions_and_metadata_keep_fts_operational() {
         init_sqlite_vec();
-        let tmp = TempDir::new().unwrap();
-        let db_path = tmp.path().join("invalid.sqlite");
-        let storage = test_storage(&tmp);
-        let file = tmp.path().join("note.md");
-        std::fs::write(&file, "# FTS fallback\n\ninvalid metadata lexical token").unwrap();
-        let mut index =
-            MemoryIndex::open_or_create(&db_path, storage.clone(), MemoryIndexConfig::default(), 0)
-                .unwrap();
-        index.reindex_file(&file, "workspace").unwrap();
-        assert!(!index.search_fts("lexical token", 10).unwrap().is_empty());
-        drop(index);
-        let connection = rusqlite::Connection::open(&db_path).unwrap();
-        connection
-            .execute(
-                schema::UPSERT_META_SQL,
-                params!["embedding_dimensions", "not-a-dimension"],
+        {
+            let tmp = TempDir::new().unwrap();
+            let db_path = tmp.path().join("zero-dimension.sqlite");
+            let storage = test_storage(&tmp);
+            let file = tmp.path().join("note.md");
+            std::fs::write(&file, "# FTS fallback\n\nzero dimension lexical token").unwrap();
+            let mut index =
+                MemoryIndex::open_or_create(&db_path, storage, MemoryIndexConfig::default(), 0)
+                    .unwrap();
+            index.reindex_file(&file, "workspace").unwrap();
+            assert!(!index.search_fts("lexical token", 10).unwrap().is_empty());
+        }
+        for (case, metadata) in [
+            ("invalid", Some("not-a-dimension")),
+            ("nonpositive", Some("0")),
+            ("missing", None),
+        ] {
+            let tmp = TempDir::new().unwrap();
+            let db_path = tmp.path().join(format!("{case}.sqlite"));
+            let storage = test_storage(&tmp);
+            let file = tmp.path().join("note.md");
+            std::fs::write(&file, "# FTS fallback\n\ninvalid metadata lexical token").unwrap();
+            let mut index = MemoryIndex::open_or_create(
+                &db_path,
+                storage.clone(),
+                MemoryIndexConfig::default(),
+                4,
             )
             .unwrap();
-        drop(connection);
-        let reopened = MemoryIndex::open_or_create_preserving_dimensions(
-            &db_path,
-            storage,
-            MemoryIndexConfig::default(),
-            4,
-        )
-        .unwrap();
-        assert!(!reopened.search_fts("lexical token", 10).unwrap().is_empty());
+            assert!(index.vec_available());
+            index.reindex_file(&file, "workspace").unwrap();
+            let (chunk_id, _) = index
+                .chunks_without_embeddings()
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap();
+            index
+                .upsert_embedding(&chunk_id, &[0.1, 0.2, 0.3, 0.4])
+                .unwrap();
+            drop(index);
+
+            let connection = rusqlite::Connection::open(&db_path).unwrap();
+            if let Some(metadata) = metadata {
+                connection
+                    .execute(
+                        schema::UPSERT_META_SQL,
+                        params!["embedding_dimensions", metadata],
+                    )
+                    .unwrap();
+            } else {
+                connection
+                    .execute("DELETE FROM meta WHERE key = 'embedding_dimensions'", [])
+                    .unwrap();
+            }
+            drop(connection);
+
+            let mut reopened = MemoryIndex::open_or_create_preserving_dimensions(
+                &db_path,
+                storage,
+                MemoryIndexConfig::default(),
+                8,
+            )
+            .unwrap();
+            assert_eq!(reopened.embedding_dimensions(), 8);
+            assert!(!reopened.vec_available());
+            assert!(!reopened.search_fts("lexical token", 10).unwrap().is_empty());
+            let vector_schema: String = reopened
+                .db()
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'chunks_vec'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(vector_schema.contains("FLOAT[4]"));
+            let cached: i64 = reopened
+                .db()
+                .query_row("SELECT COUNT(*) FROM chunks_vec", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(cached, 1);
+            let stored_metadata: Option<String> = reopened
+                .db()
+                .query_row(
+                    schema::GET_META_SQL,
+                    params!["embedding_dimensions"],
+                    |row| row.get(0),
+                )
+                .optional()
+                .unwrap();
+            assert_eq!(stored_metadata.as_deref(), metadata);
+
+            let new_file = tmp.path().join("new-note.md");
+            std::fs::write(&new_file, "# New\n\npreserved lexical write token").unwrap();
+            reopened.reindex_file(&new_file, "workspace").unwrap();
+            assert!(
+                !reopened
+                    .search_fts("lexical write token", 10)
+                    .unwrap()
+                    .is_empty()
+            );
+            let cached_after_write: i64 = reopened
+                .db()
+                .query_row("SELECT COUNT(*) FROM chunks_vec", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(cached_after_write, 1);
+            let metadata_after_write: Option<String> = reopened
+                .db()
+                .query_row(
+                    schema::GET_META_SQL,
+                    params!["embedding_dimensions"],
+                    |row| row.get(0),
+                )
+                .optional()
+                .unwrap();
+            assert_eq!(metadata_after_write.as_deref(), metadata);
+        }
     }
     // ZMY SELF-ADDED CODE END
 }
