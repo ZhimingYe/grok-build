@@ -407,18 +407,19 @@ impl SessionMemory {
         if !self.uses_legacy_pipeline() {
             return None;
         }
-        let embed_dims = self
-            .backend_params
-            .as_ref()
-            .and_then(|p| p.embed_config.as_ref())
-            .map_or(1024, |c| c.dimensions);
+        // ZMY SELF-ADDED CODE START
+        // The previous configured dimension is intentionally not used for lexical maintenance.
+        // ZMY SELF-ADDED CODE END
         let db_path = storage.workspace_dir().join("index.sqlite");
-        crate::session::memory::MemoryIndex::open_or_create(
+        // ZMY SELF-ADDED CODE START
+        // Lexical maintenance preserves any dimensions recorded by the embedding backend.
+        crate::session::memory::MemoryIndex::open_or_create_preserving_dimensions(
             &db_path,
             storage.clone(),
             Default::default(),
-            embed_dims,
+            1024,
         )
+        // ZMY SELF-ADDED CODE END
         .ok()
     }
 

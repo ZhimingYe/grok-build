@@ -1123,6 +1123,51 @@ async fn create_injection_ready_actor(
         .replace_conversation(initial_conversation);
     actor
 }
+// ZMY SELF-ADDED CODE START
+#[tokio::test(flavor = "current_thread")]
+async fn fork_none_embedding_reindexes_and_injects_fts_context() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let mut actor = create_injection_ready_actor(vec![
+                xai_grok_sampling_types::ConversationItem::system("You are helpful."),
+                xai_grok_sampling_types::ConversationItem::user(
+                    "tell me about no embedding lifecycle",
+                ),
+            ])
+            .await;
+            let storage = actor.memory.storage().unwrap();
+            let file = storage.workspace_dir().join("none-provider.md");
+            std::fs::write(
+                &file,
+                "# No embedding\n\nThis lexical lifecycle remains searchable.",
+            )
+            .unwrap();
+            let params = actor.memory.backend_params.as_mut().unwrap();
+            params.embed_config = Some(crate::config::MemoryEmbeddingConfig {
+                provider: "none".to_owned(),
+                model: Some("stale-model".to_owned()),
+                dimensions: 0,
+            });
+            params.embed_api_key = Some("stale-key".to_owned());
+            actor.memory.reindex_and_embed(&file, "workspace").await;
+            let index = actor.memory.open_index(&storage).unwrap();
+            assert!(
+                !index
+                    .search_fts("lexical lifecycle", 10)
+                    .unwrap()
+                    .is_empty()
+            );
+            drop(index);
+            let reminder = actor
+                .first_turn_memory_reminder()
+                .await
+                .expect("FTS-only memory should inject context");
+            assert!(reminder.contains("lexical lifecycle"));
+        })
+        .await;
+}
+// ZMY SELF-ADDED CODE END
 #[tokio::test(flavor = "current_thread")]
 async fn test_first_turn_reminder_injects_without_persisted_block() {
     let local = tokio::task::LocalSet::new();

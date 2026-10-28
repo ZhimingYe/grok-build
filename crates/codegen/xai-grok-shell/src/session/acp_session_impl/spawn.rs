@@ -2221,20 +2221,43 @@ pub(crate) async fn spawn_session_actor(
             .as_ref()
             .map(|mc| mc.embedding.clone())
             .unwrap_or_default();
-        let embed_dims = embed_config.dimensions;
+        // ZMY SELF-ADDED CODE START
+        // Remove the eager dimension choice; index mode now depends on provider availability.
+        // ZMY SELF-ADDED CODE END
         let sampling_base_url = embed_base_url.clone();
         let sampling_api_key = embed_api_key.clone();
         let session_id_for_reindex = session_info.id.to_string();
         let chunks_added_counter = session.memory.chunks_added.clone();
         let reindex_handle = tokio::task::spawn_local(async move {
             let db_path = storage.workspace_dir().join("index.sqlite");
-            if let Ok(mut index) = crate::session::memory::MemoryIndex::open_or_create(
-                &db_path,
-                storage.clone(),
-                index_config,
-                embed_dims,
-            ) && let Ok(files) = storage.list_memory_files()
+            // ZMY SELF-ADDED CODE START
+            // Resolve embeddings before opening the index to preserve vector dimensions in FTS-only mode.
+            let provider = sampling_api_key.and_then(|api_key| {
+                crate::session::memory::embedding::ApiEmbeddingProvider::from_session(
+                    &embed_config,
+                    sampling_base_url,
+                    api_key,
+                )
+            });
+            let open_index = if let Some(provider) = provider.as_ref() {
+                crate::session::memory::MemoryIndex::open_or_create(
+                    &db_path,
+                    storage.clone(),
+                    index_config,
+                    embed_config.dimensions,
+                )
+            } else {
+                crate::session::memory::MemoryIndex::open_or_create_preserving_dimensions(
+                    &db_path,
+                    storage.clone(),
+                    index_config,
+                    1024,
+                )
+            };
+            if let Ok(mut index) = open_index
+                && let Ok(files) = storage.list_memory_files()
             {
+                // ZMY SELF-ADDED CODE END
                 let reindex_start = std::time::Instant::now();
                 let (mut total_added, mut total_updated, mut total_removed) = (0, 0, 0);
                 for file in &files {
@@ -2250,21 +2273,14 @@ pub(crate) async fn spawn_session_actor(
                     files = files.len(),
                     "MEMORY_REINDEX: background reindex complete"
                 );
-                let embedded_count = if let Some(api_key) = sampling_api_key {
-                    if let Some(provider) =
-                        crate::session::memory::embedding::ApiEmbeddingProvider::from_session(
-                            &embed_config,
-                            sampling_base_url,
-                            api_key,
-                        )
-                    {
-                        crate::session::memory::embed_missing_chunks(&index, &provider).await
-                    } else {
-                        0
-                    }
+                // ZMY SELF-ADDED CODE START
+                let provider = provider.filter(|_| index.vec_available());
+                let embedded_count = if let Some(provider) = provider.as_ref() {
+                    crate::session::memory::embed_missing_chunks(&index, provider).await
                 } else {
                     0
                 };
+                // ZMY SELF-ADDED CODE END
                 xai_grok_telemetry::session_ctx::log_event(
                     xai_grok_telemetry::memory_telemetry::MemoryReindex {
                         session_id: session_id_for_reindex.clone(),

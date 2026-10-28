@@ -113,12 +113,14 @@ impl MemoryIndex {
 
     /// Open an index for lexical-only maintenance without changing the vector
     /// dimension already recorded by the embedding backend.
-    pub(crate) fn open_or_create_preserving_dimensions(
+    // ZMY SELF-ADDED CODE START
+    pub fn open_or_create_preserving_dimensions(
         db_path: &Path,
         storage: MemoryStorage,
         config: MemoryIndexConfig,
         fallback_dimensions: usize,
     ) -> Result<Self, rusqlite::Error> {
+        // ZMY SELF-ADDED CODE END
         if let Some(parent) = db_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -141,14 +143,12 @@ impl MemoryIndex {
         } else {
             None
         };
-        let dimensions = match stored_dimensions {
-            Some(value) => value
-                .parse::<usize>()
-                .ok()
-                .filter(|dimensions| *dimensions > 0)
-                .ok_or(rusqlite::Error::InvalidQuery)?,
-            None => fallback_dimensions,
-        };
+        // ZMY SELF-ADDED CODE START
+        let dimensions = stored_dimensions
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|dimensions| *dimensions > 0)
+            .unwrap_or(fallback_dimensions.max(1));
+        // ZMY SELF-ADDED CODE END
         Self::initialize(db, storage, config, dimensions)
     }
 
@@ -172,7 +172,8 @@ impl MemoryIndex {
         dimensions: usize,
     ) -> Result<Self, rusqlite::Error> {
         // Check if sqlite-vec loaded (graceful fallback if not)
-        let vec_available =
+        // ZMY SELF-ADDED CODE START
+        let mut vec_available =
             match db.query_row("SELECT vec_version()", [], |r| r.get::<_, String>(0)) {
                 Ok(v) => {
                     tracing::info!(version = %v, "sqlite-vec loaded");
@@ -186,48 +187,37 @@ impl MemoryIndex {
                     false
                 }
             };
+        // ZMY SELF-ADDED CODE END
 
-        db.execute_batch(&schema::schema_sql(dimensions, vec_available))?;
-
-        // Store/verify embedding dimensions in meta table
-        let stored_dims: Option<String> = db
-            .query_row(schema::GET_META_SQL, params!["embedding_dimensions"], |r| {
-                r.get(0)
-            })
-            .ok();
-
-        match stored_dims {
-            Some(ref s) if s.parse::<usize>().ok() == Some(dimensions) => {
-                // Dimensions match, nothing to do
-            }
-            Some(ref s) => {
-                // Dimension mismatch, recreate vec table
-                tracing::warn!(
-                    stored = %s,
-                    requested = dimensions,
-                    "embedding dimension mismatch, recreating chunks_vec"
-                );
-                if vec_available {
-                    let _ = db.execute("DROP TABLE IF EXISTS chunks_vec", []);
-                    db.execute_batch(&format!(
-                        "CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(\n    \
-                         chunk_id TEXT PRIMARY KEY,\n    \
-                         embedding FLOAT[{dimensions}]\n);"
-                    ))?;
+        // ZMY SELF-ADDED CODE START
+        db.execute_batch(&schema::schema_sql(dimensions, false))?;
+        if vec_available {
+            let initialize_vectors = || -> Result<(), rusqlite::Error> {
+                let transaction = db.unchecked_transaction()?;
+                let stored_dims: Option<String> = transaction
+                    .query_row(schema::GET_META_SQL, params!["embedding_dimensions"], |r| {
+                        r.get(0)
+                    })
+                    .optional()?;
+                if stored_dims
+                    .as_ref()
+                    .is_some_and(|stored| stored.parse::<usize>().ok() != Some(dimensions))
+                {
+                    transaction.execute("DROP TABLE IF EXISTS chunks_vec", [])?;
                 }
-                db.execute(
+                transaction.execute_batch(&schema::schema_sql(dimensions, true))?;
+                transaction.execute(
                     schema::UPSERT_META_SQL,
                     params!["embedding_dimensions", dimensions.to_string()],
                 )?;
-            }
-            None => {
-                // First time, store dimensions
-                db.execute(
-                    schema::UPSERT_META_SQL,
-                    params!["embedding_dimensions", dimensions.to_string()],
-                )?;
+                transaction.commit()
+            };
+            if let Err(error) = initialize_vectors() {
+                tracing::warn!(%error, "vector index unavailable; retaining full-text search");
+                vec_available = false;
             }
         }
+        // ZMY SELF-ADDED CODE END
 
         Ok(Self {
             db,
@@ -1390,4 +1380,102 @@ mod tests {
             "release_claim must reset the claim so doctor reports no stale lock"
         );
     }
+    // ZMY SELF-ADDED CODE START
+    #[test]
+    fn fork_failed_vector_migration_keeps_fts_and_old_cache() {
+        init_sqlite_vec();
+        let tmp = TempDir::new().unwrap();
+        let db_path = tmp.path().join("test.sqlite");
+        let storage = test_storage(&tmp);
+        let file = tmp.path().join("note.md");
+        std::fs::write(&file, "# Durable\n\nlexical migration rollback token").unwrap();
+        let mut index =
+            MemoryIndex::open_or_create(&db_path, storage.clone(), MemoryIndexConfig::default(), 4)
+                .unwrap();
+        index.reindex_file(&file, "workspace").unwrap();
+        let (chunk_id, _) = index
+            .chunks_without_embeddings()
+            .unwrap()
+            .into_iter()
+            .next()
+            .expect("sqlite-vec should expose the new chunk");
+        index
+            .upsert_embedding(&chunk_id, &[0.1, 0.2, 0.3, 0.4])
+            .unwrap();
+        index
+            .db()
+            .execute_batch(
+                "CREATE TRIGGER fail_embedding_dimensions BEFORE INSERT ON meta
+                 WHEN NEW.key = 'embedding_dimensions'
+                 BEGIN SELECT RAISE(ABORT, 'test migration failure'); END;",
+            )
+            .unwrap();
+        let failed =
+            MemoryIndex::open_or_create(&db_path, storage.clone(), MemoryIndexConfig::default(), 8)
+                .unwrap();
+        assert!(!failed.vec_available());
+        assert!(!failed.search_fts("rollback token", 10).unwrap().is_empty());
+        let stored: String = failed
+            .db()
+            .query_row(
+                schema::GET_META_SQL,
+                params!["embedding_dimensions"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, "4");
+        let cached: i64 = failed
+            .db()
+            .query_row("SELECT COUNT(*) FROM chunks_vec", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(cached, 1);
+        drop(failed);
+        let reopened = MemoryIndex::open_or_create_preserving_dimensions(
+            &db_path,
+            storage,
+            MemoryIndexConfig::default(),
+            1024,
+        )
+        .unwrap();
+        assert_eq!(reopened.embedding_dimensions(), 4);
+        assert!(
+            !reopened
+                .search_fts("rollback token", 10)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn fork_invalid_dimensions_and_metadata_keep_fts_operational() {
+        init_sqlite_vec();
+        let tmp = TempDir::new().unwrap();
+        let db_path = tmp.path().join("invalid.sqlite");
+        let storage = test_storage(&tmp);
+        let file = tmp.path().join("note.md");
+        std::fs::write(&file, "# FTS fallback\n\ninvalid metadata lexical token").unwrap();
+        let mut index =
+            MemoryIndex::open_or_create(&db_path, storage.clone(), MemoryIndexConfig::default(), 0)
+                .unwrap();
+        index.reindex_file(&file, "workspace").unwrap();
+        assert!(!index.search_fts("lexical token", 10).unwrap().is_empty());
+        drop(index);
+        let connection = rusqlite::Connection::open(&db_path).unwrap();
+        connection
+            .execute(
+                schema::UPSERT_META_SQL,
+                params!["embedding_dimensions", "not-a-dimension"],
+            )
+            .unwrap();
+        drop(connection);
+        let reopened = MemoryIndex::open_or_create_preserving_dimensions(
+            &db_path,
+            storage,
+            MemoryIndexConfig::default(),
+            4,
+        )
+        .unwrap();
+        assert!(!reopened.search_fts("lexical token", 10).unwrap().is_empty());
+    }
+    // ZMY SELF-ADDED CODE END
 }

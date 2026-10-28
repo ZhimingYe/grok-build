@@ -363,11 +363,25 @@ To edit memory from the shell, open the files in your editor directly -- for exa
 
 ### Embedding Settings (`[memory.embedding]`)
 
+<!-- ZMY SELF-ADDED CODE START -->
 | Key | Default | Description |
 |-----|---------|-------------|
-| `provider` | `"api"` | Embedding provider (currently `"api"`) |
-| `model` | unset | Embedding model name. Unset or `""` uses full-text-only retrieval. |
+| `provider` | `"api"` | Embedding provider; `"none"` disables embedding requests even if an old model setting remains. |
+| `model` | unset | Embedding model name. Unset, empty, or whitespace-only uses full-text-only retrieval. |
 | `dimensions` | `1024` | Embedding vector dimensions |
+
+To use memory without an embedding model, keep memory enabled and set:
+
+```toml
+[memory]
+enabled = true
+
+[memory.embedding]
+provider = "none"
+```
+
+Memory files, full-text indexing, keyword search, and retrieval for context injection remain available. Semantic similarity search and semantic duplicate detection are unavailable; a keyword miss does not mean the stored note was deleted. This setting does not disable the chat model used to summarize or consolidate memories. If embeddings are configured but their endpoint fails, keyword retrieval remains available; optional embedding calls have a ten-second total deadline including retries.
+<!-- ZMY SELF-ADDED CODE END -->
 
 ### Search Settings (`[memory.search]`)
 

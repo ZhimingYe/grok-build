@@ -8,6 +8,9 @@ use async_trait::async_trait;
 const MAX_RETRIES: usize = 3;
 /// Initial backoff delay in milliseconds (doubles on each retry: 1s, 2s, 4s).
 const INITIAL_BACKOFF_MS: u64 = 1000;
+// ZMY SELF-ADDED CODE START
+const EMBEDDING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+// ZMY SELF-ADDED CODE END
 
 /// Generates text embeddings.
 /// The `Send + Sync` bound lets implementations run inside `Send` futures such as `tokio::spawn`.
@@ -34,6 +37,21 @@ pub struct ApiEmbeddingProvider {
 }
 
 impl ApiEmbeddingProvider {
+    // ZMY SELF-ADDED CODE START
+    /// Whether configuration permits embedding requests before resolving credentials.
+    pub fn is_configured(
+        config: &xai_grok_config_types::MemoryEmbeddingConfig,
+        api_base: &str,
+    ) -> bool {
+        config.provider != "none"
+            && config
+                .model
+                .as_deref()
+                .is_some_and(|model| !model.trim().is_empty())
+            && config.dimensions > 0
+            && !xai_grok_env::is_official_service_url(api_base)
+    }
+    // ZMY SELF-ADDED CODE END
     pub fn new(
         api_base: String,
         model: String,
@@ -55,7 +73,7 @@ impl ApiEmbeddingProvider {
         client: reqwest_middleware::ClientWithMiddleware,
     ) -> Option<Self> {
         // ZMY SELF-ADDED CODE START
-        if xai_grok_env::is_official_service_url(&api_base) {
+        if !Self::is_configured(config, &api_base) {
             return None;
         }
         // ZMY SELF-ADDED CODE END
@@ -98,111 +116,116 @@ impl xai_grok_auth::HttpAuth for NoopHttpAuth {
 
 #[async_trait]
 impl EmbeddingProvider for ApiEmbeddingProvider {
+    // ZMY SELF-ADDED CODE START
     #[tracing::instrument(name = "memory.embed_batch", skip_all, fields(batch_size = texts.len()))]
     async fn embed_batch(
         &self,
         texts: &[&str],
     ) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error>> {
-        // ZMY SELF-ADDED CODE START
-        if xai_grok_env::is_official_service_url(&self.api_base) {
-            return Err(xai_grok_env::OFFICIAL_SERVICES_DISABLED.into());
-        }
-        // ZMY SELF-ADDED CODE END
-        if texts.is_empty() {
-            return Ok(vec![]);
-        }
+        tokio::time::timeout(EMBEDDING_TIMEOUT, async {
+            if xai_grok_env::is_official_service_url(&self.api_base) {
+                return Err(xai_grok_env::OFFICIAL_SERVICES_DISABLED.into());
+            }
+            if texts.is_empty() {
+                return Ok(vec![]);
+            }
 
-        let mut all_embeddings = Vec::with_capacity(texts.len());
+            let mut all_embeddings = Vec::with_capacity(texts.len());
 
-        // The API caps payload size, so texts are sent in chunks of max_batch_size
-        for batch in texts.chunks(self.max_batch_size) {
-            let input: Vec<&str> = batch.to_vec();
-            let body_json = serde_json::json!({
-                "model": self.model,
-                "input": input,
-                "dimensions": self.dimensions,
-            });
+            // The API caps payload size, so texts are sent in chunks of max_batch_size
+            for batch in texts.chunks(self.max_batch_size) {
+                let input: Vec<&str> = batch.to_vec();
+                let body_json = serde_json::json!({
+                    "model": self.model,
+                    "input": input,
+                    "dimensions": self.dimensions,
+                });
 
-            // Transient errors (429, 5xx) are retried with exponential backoff
-            let mut last_err = String::new();
-            let mut success = false;
-            for attempt in 0..MAX_RETRIES {
-                if attempt > 0 {
-                    let delay = INITIAL_BACKOFF_MS * 2u64.pow(attempt as u32 - 1);
-                    tracing::warn!(
-                        attempt,
-                        delay_ms = delay,
-                        "retrying embedding API call after transient error"
-                    );
-                    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-                }
-
-                let request = xai_grok_http::shared_client()
-                    .post(format!("{}/embeddings", self.api_base))
-                    .json(&body_json)
-                    .header("X-XAI-Token-Auth", "xai-grok-cli")
-                    .header("x-grok-client-version", xai_grok_version::VERSION);
-
-                let req = match request.build() {
-                    Ok(r) => r,
-                    Err(e) => {
-                        return Err(format!("failed to build embedding request: {e}").into());
+                // Transient errors (429, 5xx) are retried with exponential backoff
+                let mut last_err = String::new();
+                let mut success = false;
+                for attempt in 0..MAX_RETRIES {
+                    if attempt > 0 {
+                        let delay = INITIAL_BACKOFF_MS * 2u64.pow(attempt as u32 - 1);
+                        tracing::warn!(
+                            attempt,
+                            delay_ms = delay,
+                            "retrying embedding API call after transient error"
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
                     }
-                };
-                let response = match self.client.execute(req).await {
-                    Ok(r) => r,
-                    Err(e) => {
-                        last_err = format!("request failed: {e}");
+
+                    let request = xai_grok_http::shared_client()
+                        .post(format!("{}/embeddings", self.api_base))
+                        .json(&body_json)
+                        .header("X-XAI-Token-Auth", "xai-grok-cli")
+                        .header("x-grok-client-version", xai_grok_version::VERSION);
+
+                    let req = match request.build() {
+                        Ok(r) => r,
+                        Err(e) => {
+                            return Err(format!("failed to build embedding request: {e}").into());
+                        }
+                    };
+                    let response = match self.client.execute(req).await {
+                        Ok(r) => r,
+                        Err(e) => {
+                            last_err = format!("request failed: {e}");
+                            continue;
+                        }
+                    };
+
+                    let status = response.status();
+                    if status.is_success() {
+                        let body: serde_json::Value = response.json().await?;
+                        let data = body
+                            .get("data")
+                            .and_then(|d| d.as_array())
+                            .ok_or("embedding response missing 'data' array")?;
+
+                        for item in data {
+                            let embedding: Vec<f32> = item
+                                .get("embedding")
+                                .and_then(|e| e.as_array())
+                                .ok_or("embedding item missing 'embedding' array")?
+                                .iter()
+                                .filter_map(|v| v.as_f64().map(|f| f as f32))
+                                .collect();
+                            all_embeddings.push(embedding);
+                        }
+                        success = true;
+                        break;
+                    }
+
+                    // Retry on 429 (rate limit) or 5xx (server error)
+                    if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
+                    {
+                        last_err = format!(
+                            "HTTP {status}: {}",
+                            response.text().await.unwrap_or_default()
+                        );
                         continue;
                     }
-                };
 
-                let status = response.status();
-                if status.is_success() {
-                    let body: serde_json::Value = response.json().await?;
-                    let data = body
-                        .get("data")
-                        .and_then(|d| d.as_array())
-                        .ok_or("embedding response missing 'data' array")?;
-
-                    for item in data {
-                        let embedding: Vec<f32> = item
-                            .get("embedding")
-                            .and_then(|e| e.as_array())
-                            .ok_or("embedding item missing 'embedding' array")?
-                            .iter()
-                            .filter_map(|v| v.as_f64().map(|f| f as f32))
-                            .collect();
-                        all_embeddings.push(embedding);
-                    }
-                    success = true;
-                    break;
+                    // Any other status is not retryable, so fail immediately
+                    let body = response.text().await.unwrap_or_default();
+                    return Err(format!("embedding API error {status}: {body}").into());
                 }
 
-                // Retry on 429 (rate limit) or 5xx (server error)
-                if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
-                    last_err = format!(
-                        "HTTP {status}: {}",
-                        response.text().await.unwrap_or_default()
-                    );
-                    continue;
+                if !success {
+                    return Err(format!(
+                        "embedding API failed after {MAX_RETRIES} attempts: {last_err}"
+                    )
+                    .into());
                 }
-
-                // Any other status is not retryable, so fail immediately
-                let body = response.text().await.unwrap_or_default();
-                return Err(format!("embedding API error {status}: {body}").into());
             }
 
-            if !success {
-                return Err(format!(
-                    "embedding API failed after {MAX_RETRIES} attempts: {last_err}"
-                )
-                .into());
-            }
-        }
-
-        Ok(all_embeddings)
+            Ok(all_embeddings)
+        })
+        .await
+        .map_err(|_| Box::<dyn std::error::Error>::from("embedding request timed out"))?
     }
+    // ZMY SELF-ADDED CODE END
 
     fn model_name(&self) -> &str {
         &self.model
@@ -358,6 +381,40 @@ mod tests {
         assert_eq!(provider.model_name(), "local-embedding");
         assert_eq!(provider.dimensions(), 2);
         assert_eq!(embeddings, vec![vec![0.25, 0.5]]);
+    }
+    // ZMY SELF-ADDED CODE END
+
+    // ZMY SELF-ADDED CODE START
+    #[tokio::test]
+    async fn fork_embedding_timeout_covers_the_retry_budget() {
+        use std::io::{Read, Write};
+        use std::sync::mpsc;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (stop_tx, stop_rx) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let _ = stream.read(&mut request);
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\n");
+            let _ = stop_rx.recv_timeout(std::time::Duration::from_secs(12));
+        });
+        let client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new()).build();
+        let provider = ApiEmbeddingProvider::new(
+            format!("http://{address}"),
+            "stalled-embedding".into(),
+            2,
+            client,
+        );
+        let started = std::time::Instant::now();
+        let error = provider.embed_batch(&["timeout"]).await.unwrap_err();
+        let elapsed = started.elapsed();
+        assert!(error.to_string().contains("timed out"));
+        assert!(elapsed >= std::time::Duration::from_secs(9));
+        assert!(elapsed < std::time::Duration::from_secs(12));
+        let _ = stop_tx.send(());
+        server.join().unwrap();
     }
     // ZMY SELF-ADDED CODE END
 }

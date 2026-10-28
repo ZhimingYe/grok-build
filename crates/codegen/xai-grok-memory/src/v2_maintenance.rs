@@ -727,13 +727,16 @@ impl V2MaintenanceStore {
 
     fn drop_from_index<'a>(&self, paths: impl IntoIterator<Item = &'a str>) -> Result<()> {
         let storage = MemoryStorage::new_flat(&self.scope_dir, &self.scope_dir);
-        let mut index = MemoryIndex::open_or_create(
+        // ZMY SELF-ADDED CODE START
+        // Avoid forcing a lexical-only dimension that discards existing vectors.
+        let mut index = MemoryIndex::open_or_create_preserving_dimensions(
             &self.scope_dir.join("index.sqlite"),
             storage,
             xai_grok_config_types::MemoryIndexConfig::default(),
-            1,
+            1024,
         )
         .map_err(V2MaintenanceError::Index)?;
+        // ZMY SELF-ADDED CODE END
         for relative in paths {
             index
                 .delete_path(&self.scope_dir.join(relative))
