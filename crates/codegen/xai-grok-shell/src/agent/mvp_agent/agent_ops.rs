@@ -133,8 +133,22 @@ impl MvpAgent {
         if xai_grok_env::is_official_service_url(&config.base_url) {
             return Ok((None, model));
         }
-        let client = OaiCompatClient::new(config).map_err(map_sampling_err_to_acp)?;
-        Ok((Some(client), model))
+        match OaiCompatClient::new(config) {
+            Ok(client) => Ok((Some(client), model)),
+            Err(error) => {
+                tracing::warn!(%error, "title client unavailable; falling back to session model");
+                let client = if xai_grok_env::is_official_service_url(&primary.base_url) {
+                    None
+                } else {
+                    OaiCompatClient::new(primary.clone())
+                        .inspect_err(|error| {
+                            tracing::warn!(%error, "title client unavailable; using local title");
+                        })
+                        .ok()
+                };
+                Ok((client, primary.model.clone()))
+            }
+        }
     }
     // ZMY SELF-ADDED CODE END
     fn has_proxy_credentials(&self) -> bool {

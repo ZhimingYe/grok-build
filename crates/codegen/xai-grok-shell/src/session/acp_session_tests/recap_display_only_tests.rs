@@ -1509,3 +1509,88 @@ async fn parent_cached_request_pins_fail_length_policy() {
         xai_grok_sampling_types::LengthPolicy::Fail
     );
 }
+
+// ZMY SELF-ADDED CODE START
+#[test]
+fn fork_shell_auxiliary_requests_inherit_session_model_and_honor_suggestion_override() {
+    use super::disk_full_tests::{
+        actor_with_mock_sampler_configured, block_on_session, current_thread_local,
+    };
+    use xai_grok_test_support::sse::responses_api_script_exact;
+    use xai_grok_test_support::{MockInferenceServer, ScriptedResponse};
+
+    block_on_session(|| {
+        current_thread_local(async {
+            let server = MockInferenceServer::start().await.expect("mock server");
+            for text in ["rewritten note", "git status", "git stash"] {
+                server.enqueue_response(
+                    "/v1/responses",
+                    ScriptedResponse::sse(responses_api_script_exact(text, "test")),
+                );
+            }
+            let (gateway_tx, gateway_rx) = tokio::sync::mpsc::unbounded_channel();
+            drain_gateway(gateway_rx);
+            let (persistence_tx, persistence_rx) =
+                tokio::sync::mpsc::unbounded_channel::<PersistenceMsg>();
+            drain_persistence(persistence_rx);
+            let actor = actor_with_mock_sampler_configured(
+                &server,
+                persistence_tx,
+                gateway_tx,
+                None,
+                |_| {},
+            )
+            .await;
+
+            assert_eq!(
+                actor
+                    .handle_rewrite_memory_note("original note", "session context")
+                    .await
+                    .unwrap(),
+                "rewritten note"
+            );
+            assert_eq!(
+                actor.handle_ai_suggest("git st", "/tmp", None).await,
+                Some("git status".to_owned())
+            );
+            assert_eq!(
+                actor
+                    .handle_ai_suggest("git st", "/tmp", Some("explicit-model"))
+                    .await,
+                Some("git stash".to_owned())
+            );
+
+            let requests = server.requests();
+            let response_requests: Vec<_> = requests
+                .iter()
+                .filter(|request| request.path.contains("responses"))
+                .collect();
+            assert_eq!(response_requests.len(), 3);
+            assert_eq!(
+                response_requests[0]
+                    .body
+                    .as_ref()
+                    .and_then(|body| body.get("model"))
+                    .and_then(serde_json::Value::as_str),
+                Some("test")
+            );
+            assert_eq!(
+                response_requests[1]
+                    .body
+                    .as_ref()
+                    .and_then(|body| body.get("model"))
+                    .and_then(serde_json::Value::as_str),
+                Some("test")
+            );
+            assert_eq!(
+                response_requests[2]
+                    .body
+                    .as_ref()
+                    .and_then(|body| body.get("model"))
+                    .and_then(serde_json::Value::as_str),
+                Some("explicit-model")
+            );
+        });
+    });
+}
+// ZMY SELF-ADDED CODE END

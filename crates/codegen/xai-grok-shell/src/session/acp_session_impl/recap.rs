@@ -656,15 +656,16 @@ impl SessionActor {
             ConversationItem::user(user_msg),
         ];
 
-        let model = match model_override {
-            Some(m) => m.to_owned(),
-            None => "grok-4.6".to_owned(),
-        };
+        // ZMY SELF-ADDED CODE START
+        let model = model_override.map(str::to_owned);
+        // ZMY SELF-ADDED CODE END
 
         let request = ConversationRequest {
             items,
             tools: vec![],
-            model: Some(model),
+            // ZMY SELF-ADDED CODE START
+            model,
+            // ZMY SELF-ADDED CODE END
             temperature: Some(0.1),
             max_output_tokens: Some(50),
             ..Default::default()
@@ -747,20 +748,44 @@ impl SessionActor {
         };
 
         self.refresh_token_if_expired().await;
-        let mut sampling_config = self.reconstruct_full_config().await;
-        sampling_config.model = model.clone();
+        // ZMY SELF-ADDED CODE START
+        let session_config = self.reconstruct_full_config().await;
+        let mut sampling_config = match self.resolve_aux_sampler_config(&model).await {
+            Some(mut config) => {
+                crate::agent::config::stamp_session_local_sampler_fields(
+                    &mut config,
+                    &session_config,
+                    self.client_identifier.clone(),
+                    session_config.max_retries,
+                );
+                config
+            }
+            None => session_config,
+        };
+        let effective_model = sampling_config.model.clone();
+        // ZMY SELF-ADDED CODE END
         sampling_config.reasoning_effort = None;
-        let supports_reasoning = self.models_manager.model_supports_reasoning_effort(&model);
+        // ZMY SELF-ADDED CODE START
+        let supports_reasoning = self
+            .models_manager
+            .model_supports_reasoning_effort(&effective_model);
+        // ZMY SELF-ADDED CODE END
         let suggest_reasoning = prompt_suggest::resolve_suggest_reasoning(
             prompt_suggest::suggest_request_effort(
                 configured_reasoning_effort,
-                &model,
+                // ZMY SELF-ADDED CODE START
+                &effective_model,
+                // ZMY SELF-ADDED CODE END
                 supports_reasoning,
             ),
-            &model,
+            // ZMY SELF-ADDED CODE START
+            &effective_model,
+            // ZMY SELF-ADDED CODE END
             supports_reasoning,
             self.models_manager.model_supports_reasoning_effort_value(
-                &model,
+                // ZMY SELF-ADDED CODE START
+                &effective_model,
+                // ZMY SELF-ADDED CODE END
                 xai_grok_sampling_types::ReasoningEffort::None,
             ),
         );
@@ -785,7 +810,9 @@ impl SessionActor {
         };
 
         tracing::debug!(
-            model = %model,
+            // ZMY SELF-ADDED CODE START
+            model = %effective_model,
+            // ZMY SELF-ADDED CODE END
             transcript_len = transcript.len(),
             "prompt suggest: requesting"
         );

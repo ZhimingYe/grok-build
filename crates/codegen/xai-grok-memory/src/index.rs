@@ -440,76 +440,129 @@ impl MemoryIndex {
     // Search
     // -----------------------------------------------------------------------
 
-    /// FTS5 keyword search. Returns results ranked by BM25 score.
-    /// Applies stop word filtering to improve precision for conversational queries.
-    /// When all words are stop words, it returns empty results; the caller (`hybrid_search`) falls back to the vector search path.
+    // ZMY SELF-ADDED CODE START
+    /// FTS5 keyword search with a bounded literal fallback when FTS has no hits.
     pub fn search_fts_by_sources(
         &self,
         query: &str,
         limit: usize,
         sources: &[&str],
     ) -> Result<Vec<FtsResult>, rusqlite::Error> {
-        if sources.is_empty() {
+        if sources.is_empty() || limit == 0 {
             return Ok(vec![]);
         }
-        let keywords = super::query_expansion::extract_keywords(query);
-        let fts_query = keywords.join(" OR ");
-        if fts_query.is_empty() {
-            return Ok(vec![]);
+        let fts_query = super::query_expansion::lexical_search_query(query);
+        if !fts_query.is_empty() {
+            let _g = tracing::info_span!("memory.fts_search").entered();
+            let placeholders: Vec<String> = sources
+                .iter()
+                .enumerate()
+                .map(|(i, _)| format!("?{}", i + 3))
+                .collect();
+            let sql = format!(
+                "SELECT f.rowid, f.rank FROM chunks_fts f \
+                 JOIN chunks c ON f.rowid = c.rowid \
+                 WHERE chunks_fts MATCH ?1 AND c.source IN ({}) \
+                 ORDER BY f.rank LIMIT ?2",
+                placeholders.join(", ")
+            );
+            let mut stmt = self.db.prepare(&sql)?;
+            let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+            params_vec.push(Box::new(fts_query));
+            params_vec.push(Box::new(limit as i64));
+            for source in sources {
+                params_vec.push(Box::new(source.to_string()));
+            }
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params_vec.iter().map(|param| param.as_ref()).collect();
+            let rows = stmt
+                .query_map(param_refs.as_slice(), |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            let results = self.resolve_fts_rowids(rows)?;
+            if !results.is_empty() {
+                return Ok(results);
+            }
         }
-
-        let _g = tracing::info_span!("memory.fts_search").entered();
-        let placeholders: Vec<String> = sources
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("?{}", i + 3))
-            .collect();
-        let sql = format!(
-            "SELECT f.rowid, f.rank FROM chunks_fts f \
-             JOIN chunks c ON f.rowid = c.rowid \
-             WHERE chunks_fts MATCH ?1 AND c.source IN ({}) \
-             ORDER BY f.rank LIMIT ?2",
-            placeholders.join(", ")
-        );
-        let mut stmt = self.db.prepare(&sql)?;
-        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        params_vec.push(Box::new(fts_query));
-        params_vec.push(Box::new(limit as i64));
-        for s in sources {
-            params_vec.push(Box::new(s.to_string()));
-        }
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            params_vec.iter().map(|p| p.as_ref()).collect();
-
-        let rows = stmt
-            .query_map(param_refs.as_slice(), |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-
-        self.resolve_fts_rowids(rows)
+        self.search_fts_substring(query, limit, Some(sources))
     }
 
     pub fn search_fts(&self, query: &str, limit: usize) -> Result<Vec<FtsResult>, rusqlite::Error> {
-        let keywords = super::query_expansion::extract_keywords(query);
-        let fts_query = keywords.join(" OR ");
-        if fts_query.is_empty() {
+        if limit == 0 {
             return Ok(vec![]);
         }
 
-        let _g = tracing::info_span!("memory.fts_search").entered();
-        let mut stmt = self.db.prepare(
-            "SELECT rowid, rank FROM chunks_fts WHERE chunks_fts MATCH ?1 \
-             ORDER BY rank LIMIT ?2",
-        )?;
+        let fts_query = super::query_expansion::lexical_search_query(query);
+        if !fts_query.is_empty() {
+            let _g = tracing::info_span!("memory.fts_search").entered();
+            let mut stmt = self.db.prepare(
+                "SELECT rowid, rank FROM chunks_fts WHERE chunks_fts MATCH ?1 \
+                 ORDER BY rank LIMIT ?2",
+            )?;
+            let rows = stmt
+                .query_map(params![fts_query, limit], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            let results = self.resolve_fts_rowids(rows)?;
+            if !results.is_empty() {
+                return Ok(results);
+            }
+        }
+        self.search_fts_substring(query, limit, None)
+    }
+
+    fn search_fts_substring(
+        &self,
+        query: &str,
+        limit: usize,
+        sources: Option<&[&str]>,
+    ) -> Result<Vec<FtsResult>, rusqlite::Error> {
+        let literal = query.trim();
+        let char_count = literal.chars().count();
+        if literal.is_empty()
+            || char_count > 1024
+            || !literal.chars().any(char::is_alphanumeric)
+            || char_count == 1
+        {
+            return Ok(vec![]);
+        }
+
+        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> =
+            vec![Box::new(literal.to_owned()), Box::new(limit as i64)];
+        let sql = if let Some(sources) = sources {
+            let placeholders: Vec<String> = sources
+                .iter()
+                .enumerate()
+                .map(|(i, _)| format!("?{}", i + 3))
+                .collect();
+            for source in sources {
+                params_vec.push(Box::new(source.to_string()));
+            }
+            format!(
+                "SELECT c.rowid FROM chunks c \
+                 WHERE instr(lower(c.text), lower(?1)) > 0 AND c.source IN ({}) \
+                 ORDER BY c.created_at DESC, c.path ASC, c.id ASC LIMIT ?2",
+                placeholders.join(", ")
+            )
+        } else {
+            "SELECT c.rowid FROM chunks c \
+             WHERE instr(lower(c.text), lower(?1)) > 0 \
+             ORDER BY c.created_at DESC, c.path ASC, c.id ASC LIMIT ?2"
+                .to_owned()
+        };
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params_vec.iter().map(|param| param.as_ref()).collect();
+        let mut stmt = self.db.prepare(&sql)?;
         let rows = stmt
-            .query_map(params![fts_query, limit], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?))
+            .query_map(param_refs.as_slice(), |row| {
+                Ok((row.get::<_, i64>(0)?, -1.0e-6))
             })?
             .collect::<Result<Vec<_>, _>>()?;
-
         self.resolve_fts_rowids(rows)
     }
+    // ZMY SELF-ADDED CODE END
 
     fn resolve_fts_rowids(&self, rows: Vec<(i64, f64)>) -> Result<Vec<FtsResult>, rusqlite::Error> {
         let mut results = Vec::with_capacity(rows.len());
@@ -1752,6 +1805,99 @@ mod tests {
                 .unwrap();
             assert!(recovered.chunks_without_embeddings().unwrap().is_empty());
         }
+    }
+    // ZMY SELF-ADDED CODE END
+
+    // ZMY SELF-ADDED CODE START
+    #[test]
+    fn fork_lexical_search_recalls_literal_chinese_technical_and_operator_queries() {
+        init_sqlite_vec();
+        let tmp = TempDir::new().unwrap();
+        let mut index = test_index(&tmp);
+        let workspace = tmp.path().join("workspace.md");
+        let global = tmp.path().join("global.md");
+        let technical = tmp.path().join("technical.md");
+        let literal = tmp.path().join("literal.md");
+        std::fs::write(&workspace, "# 部署要求\n\n部署要求必须兼容旧系统。").unwrap();
+        std::fs::write(&global, "# 部署\n\n部署要求必须兼容旧系统。").unwrap();
+        std::fs::write(
+            &technical,
+            "# Listener\n\nThe listener uses port 8080 and a C++ service.",
+        )
+        .unwrap();
+        std::fs::write(
+            &literal,
+            "# Literal query\n\nThe exact input is \"the OR a++\"; payload %' OR 1=1 --.",
+        )
+        .unwrap();
+        index.reindex_file(&workspace, "workspace").unwrap();
+        index.reindex_file(&global, "global").unwrap();
+        index.reindex_file(&technical, "workspace").unwrap();
+        index.reindex_file(&literal, "workspace").unwrap();
+
+        let chinese = index.search_fts("要求必须兼容", 10).unwrap();
+        assert!(chinese.iter().any(|result| {
+            result
+                .chunk_id
+                .starts_with(workspace.to_string_lossy().as_ref())
+        }));
+        let workspace_results = index
+            .search_fts_by_sources("要求必须兼容", 10, &["workspace"])
+            .unwrap();
+        assert_eq!(workspace_results.len(), 1);
+        assert_eq!(
+            workspace_results[0].chunk_id,
+            format!("{}:0", workspace.to_string_lossy())
+        );
+        assert!(
+            index
+                .search_fts_by_sources("要求必须兼容", 10, &["global"])
+                .unwrap()
+                .iter()
+                .all(|result| result
+                    .chunk_id
+                    .starts_with(global.to_string_lossy().as_ref()))
+        );
+
+        let port = index.search_fts("8080", 10).unwrap();
+        assert!(
+            port.iter()
+                .any(|result| result.chunk_id == format!("{}:0", technical.to_string_lossy()))
+        );
+        let cpp = index.search_fts("C++", 10).unwrap();
+        assert!(
+            cpp.iter()
+                .any(|result| result.chunk_id == format!("{}:0", technical.to_string_lossy()))
+        );
+
+        let operator = index.search_fts("\"the OR a++\"", 10).unwrap();
+        assert_eq!(operator.len(), 1);
+        assert_eq!(
+            operator[0].chunk_id,
+            format!("{}:0", literal.to_string_lossy())
+        );
+        let english = index.search_fts("listener port service", 10).unwrap();
+        assert!(
+            english
+                .iter()
+                .any(|result| result.chunk_id == format!("{}:0", technical.to_string_lossy()))
+        );
+        assert!(index.search_fts("   ", 10).unwrap().is_empty());
+        assert!(index.search_fts("++---", 10).unwrap().is_empty());
+        assert!(index.search_fts("部署要求兼容旧", 0).unwrap().is_empty());
+        assert!(
+            index
+                .search_fts("界".repeat(1025).as_str(), 10)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            index
+                .search_fts_by_sources("部署要求兼容旧", 10, &[])
+                .unwrap()
+                .is_empty()
+        );
+        assert!(chinese.iter().all(|result| result.rank < 0.0));
     }
     // ZMY SELF-ADDED CODE END
 }

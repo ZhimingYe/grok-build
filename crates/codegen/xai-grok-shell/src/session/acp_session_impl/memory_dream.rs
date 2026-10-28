@@ -839,7 +839,9 @@ impl SessionActor {
         }
     }
 
-    /// Rewrite a raw memory note into well-structured markdown via a one-shot LLM call to `grok-4.6`.
+    // ZMY SELF-ADDED CODE START
+    /// Rewrite a raw memory note via the current session's model.
+    // ZMY SELF-ADDED CODE END
     ///
     /// Same pattern as [`handle_ai_suggest`]: prepare a sampling client, build a system and user prompt, collect with a short idle timeout.
     pub(super) async fn handle_rewrite_memory_note(
@@ -884,7 +886,9 @@ impl SessionActor {
         let request = ConversationRequest {
             items,
             tools: vec![],
-            model: Some("grok-4.6".to_owned()),
+            // ZMY SELF-ADDED CODE START
+            model: None,
+            // ZMY SELF-ADDED CODE END
             temperature: Some(0.3),
             max_output_tokens: Some(1024),
             ..Default::default()

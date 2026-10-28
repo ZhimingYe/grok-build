@@ -428,30 +428,44 @@ impl MemoryBackend for MemoryBackendImpl {
         let mut embedded_count: usize = 0;
         let mut embedding_batch_failed = false;
         // ZMY SELF-ADDED CODE END
+        // ZMY SELF-ADDED CODE START
+        let embedding_deadline =
+            tokio::time::Instant::now() + super::search::INTERACTIVE_EMBEDDING_BUDGET;
+        // ZMY SELF-ADDED CODE END
         if !reindex_chunks.is_empty()
             && let Some(ref provider) = provider
         {
             let mut upserts: Vec<(String, Vec<f32>)> = Vec::new();
             for batch in reindex_chunks.chunks(32) {
                 let texts: Vec<&str> = batch.iter().map(|(_, t)| t.as_str()).collect();
-                match provider.embed_batch(&texts).await {
-                    Ok(embeddings) => {
+                // ZMY SELF-ADDED CODE START
+                match tokio::time::timeout_at(embedding_deadline, provider.embed_batch(&texts))
+                    .await
+                {
+                    Ok(Ok(embeddings)) => {
                         for ((chunk_id, _), emb) in batch.iter().zip(embeddings.into_iter()) {
                             upserts.push((chunk_id.clone(), emb));
                         }
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         tracing::warn!(
                             target: crate::MEMORY_LOG_TARGET,
                             error = %e,
                             "embedding batch failed during sync-on-search, skipping"
                         );
-                        // ZMY SELF-ADDED CODE START
                         embedding_batch_failed = true;
                         break;
-                        // ZMY SELF-ADDED CODE END
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            target: crate::MEMORY_LOG_TARGET,
+                            "embedding batch exceeded the interactive budget"
+                        );
+                        embedding_batch_failed = true;
+                        break;
                     }
                 }
+                // ZMY SELF-ADDED CODE END
             }
             // Sync: upsert embeddings back (borrows &index, no await)
             for (chunk_id, emb) in &upserts {
@@ -498,9 +512,13 @@ impl MemoryBackend for MemoryBackendImpl {
                 .as_ref()
                 .map(|provider| provider as &dyn super::embedding::EmbeddingProvider)
         };
-        let query_embedding =
-            super::search::resolve_query_embedding(query_provider, index.vec_available(), query)
-                .await;
+        let query_embedding = super::search::resolve_query_embedding_until(
+            query_provider,
+            index.vec_available(),
+            query,
+            embedding_deadline,
+        )
+        .await;
         // ZMY SELF-ADDED CODE END
 
         // ── Sync phase 3: vector search + scoring + merge (borrows &index) ──
@@ -1257,6 +1275,74 @@ mod factory_tests {
         stopped.store(true, Ordering::SeqCst);
         server.join().unwrap();
         assert_eq!(requests.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn fork_stalled_interactive_query_keeps_fts_results_and_cools_down() {
+        use std::io::{Read, Write};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        init_sqlite_vec();
+        let tmp = TempDir::new().unwrap();
+        let storage = make_storage(&tmp);
+        let db_path = storage.workspace_dir().join("index.sqlite");
+        let mut index =
+            MemoryIndex::open_or_create(&db_path, storage.clone(), Default::default(), 4).unwrap();
+        let file = tmp.path().join("stalled.md");
+        std::fs::write(&file, "# Local result\n\nbounded stalled lexical result").unwrap();
+        index.reindex_file(&file, "workspace").unwrap();
+        drop(index);
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let requests = Arc::new(AtomicUsize::new(0));
+        let server_requests = requests.clone();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            server_requests.fetch_add(1, Ordering::SeqCst);
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(1)))
+                .unwrap();
+            let mut request = [0_u8; 4096];
+            let _ = stream.read(&mut request);
+            std::thread::sleep(std::time::Duration::from_millis(3000));
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        });
+        let params = MemoryBackendParams {
+            embed_config: Some(MemoryEmbeddingConfig {
+                model: Some("stalled-local-model".to_owned()),
+                dimensions: 4,
+                ..Default::default()
+            }),
+            embed_base_url: format!("http://{address}/v1"),
+            embed_api_key: Some("local-key".to_owned()),
+            ..make_params_fts_only("fork-stalled-query")
+        };
+        let backend = MemoryBackendImpl::from_session_params(storage, &params);
+        let started = std::time::Instant::now();
+        let first = tokio::time::timeout(
+            std::time::Duration::from_millis(2800),
+            backend.search("bounded stalled lexical", 5, 0.0),
+        )
+        .await
+        .expect("interactive search should respect its shared deadline")
+        .unwrap();
+        assert!(
+            !first.is_empty(),
+            "FTS results must survive a stalled embedding"
+        );
+        assert!(started.elapsed() < std::time::Duration::from_millis(2600));
+        let second = backend
+            .search("bounded stalled lexical", 5, 0.0)
+            .await
+            .unwrap();
+        assert!(!second.is_empty());
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        server.join().unwrap();
     }
     // ZMY SELF-ADDED CODE END
 

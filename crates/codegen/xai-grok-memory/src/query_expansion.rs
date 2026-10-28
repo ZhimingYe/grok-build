@@ -167,6 +167,23 @@ pub fn extract_keywords(query: &str) -> Vec<String> {
         .collect()
 }
 
+// ZMY SELF-ADDED CODE START
+/// Builds a literal FTS query while retaining numeric and short technical tokens.
+pub fn lexical_search_query(query: &str) -> String {
+    let lowered = query.to_lowercase();
+    let mut seen = HashSet::new();
+    lowered
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|word| !word.is_empty())
+        .filter(|word| !STOP_WORDS.contains(word))
+        .filter(|word| seen.insert(*word))
+        .take(64)
+        .map(|word| format!("\"{}\"", word.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" OR ")
+}
+// ZMY SELF-ADDED CODE END
+
 #[cfg(test)]
 mod tests {
     use super::*;

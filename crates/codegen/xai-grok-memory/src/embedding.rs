@@ -12,6 +12,116 @@ const INITIAL_BACKOFF_MS: u64 = 1000;
 const EMBEDDING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 // ZMY SELF-ADDED CODE END
 
+// ZMY SELF-ADDED CODE START
+const EMBEDDING_FAILURE_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(60);
+const MAX_EMBEDDING_CIRCUITS: usize = 256;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct EmbeddingCircuitKey(u64);
+
+struct EmbeddingCircuitEntry {
+    in_flight: bool,
+    failure_until: Option<std::time::Instant>,
+    last_touched: std::time::Instant,
+}
+
+static EMBEDDING_CIRCUITS: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<EmbeddingCircuitKey, EmbeddingCircuitEntry>>,
+> = std::sync::OnceLock::new();
+
+fn embedding_circuit_key(api_base: &str, model: &str, dimensions: usize) -> EmbeddingCircuitKey {
+    use std::hash::{Hash, Hasher};
+
+    let endpoint = reqwest::Url::parse(api_base.trim())
+        .map(|url| url.to_string().trim_end_matches('/').to_owned())
+        .unwrap_or_else(|_| api_base.trim().trim_end_matches('/').to_owned());
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    endpoint.hash(&mut hasher);
+    model.hash(&mut hasher);
+    dimensions.hash(&mut hasher);
+    EmbeddingCircuitKey(hasher.finish())
+}
+
+struct EmbeddingRequestGuard {
+    key: EmbeddingCircuitKey,
+    cooldown: std::time::Duration,
+    completed: bool,
+}
+
+impl EmbeddingRequestGuard {
+    fn begin(
+        key: EmbeddingCircuitKey,
+        cooldown: std::time::Duration,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let now = std::time::Instant::now();
+        let circuits = EMBEDDING_CIRCUITS.get_or_init(Default::default);
+        let mut circuits = circuits
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        circuits.retain(|_, entry| {
+            entry.in_flight || entry.failure_until.is_some_and(|until| until > now)
+        });
+        if let Some(entry) = circuits.get_mut(&key) {
+            if entry.in_flight {
+                return Err("embedding request already in flight".into());
+            }
+            if entry.failure_until.is_some_and(|until| until > now) {
+                return Err("embedding temporarily unavailable after a recent failure".into());
+            }
+            entry.in_flight = true;
+            entry.failure_until = None;
+            entry.last_touched = now;
+            return Ok(Self {
+                key,
+                cooldown,
+                completed: false,
+            });
+        }
+        if circuits.len() >= MAX_EMBEDDING_CIRCUITS {
+            return Err("embedding circuit registry is busy".into());
+        }
+        circuits.insert(
+            key,
+            EmbeddingCircuitEntry {
+                in_flight: true,
+                failure_until: None,
+                last_touched: now,
+            },
+        );
+        Ok(Self {
+            key,
+            cooldown,
+            completed: false,
+        })
+    }
+
+    fn succeed(mut self) {
+        self.finish(None);
+        self.completed = true;
+    }
+
+    fn finish(&self, failure_until: Option<std::time::Instant>) {
+        let circuits = EMBEDDING_CIRCUITS.get_or_init(Default::default);
+        let mut circuits = circuits
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(entry) = circuits.get_mut(&self.key) {
+            entry.in_flight = false;
+            entry.failure_until = failure_until;
+            entry.last_touched = std::time::Instant::now();
+        }
+    }
+}
+
+impl Drop for EmbeddingRequestGuard {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.finish(Some(std::time::Instant::now() + self.cooldown));
+        }
+    }
+}
+// ZMY SELF-ADDED CODE END
+
 /// Generates text embeddings.
 /// The `Send + Sync` bound lets implementations run inside `Send` futures such as `tokio::spawn`.
 #[async_trait]
@@ -122,28 +232,47 @@ impl EmbeddingProvider for ApiEmbeddingProvider {
         &self,
         texts: &[&str],
     ) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error>> {
-        tokio::time::timeout(EMBEDDING_TIMEOUT, async {
-            if xai_grok_env::is_official_service_url(&self.api_base) {
-                return Err(xai_grok_env::OFFICIAL_SERVICES_DISABLED.into());
-            }
-            if texts.is_empty() {
-                return Ok(vec![]);
-            }
+        self.embed_batch_with_policy(texts, EMBEDDING_TIMEOUT, EMBEDDING_FAILURE_COOLDOWN)
+            .await
+    }
+    fn model_name(&self) -> &str {
+        &self.model
+    }
 
+    fn dimensions(&self) -> usize {
+        self.dimensions
+    }
+}
+// ZMY SELF-ADDED CODE END
+
+// ZMY SELF-ADDED CODE START
+impl ApiEmbeddingProvider {
+    async fn embed_batch_with_policy(
+        &self,
+        texts: &[&str],
+        timeout: std::time::Duration,
+        cooldown: std::time::Duration,
+    ) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error>> {
+        if texts.is_empty() {
+            return Ok(vec![]);
+        }
+        if xai_grok_env::is_official_service_url(&self.api_base) {
+            return Err(xai_grok_env::OFFICIAL_SERVICES_DISABLED.into());
+        }
+
+        tokio::time::timeout(timeout, async {
+            let key = embedding_circuit_key(&self.api_base, &self.model, self.dimensions);
+            let guard = EmbeddingRequestGuard::begin(key, cooldown)?;
             let mut all_embeddings = Vec::with_capacity(texts.len());
 
-            // The API caps payload size, so texts are sent in chunks of max_batch_size
             for batch in texts.chunks(self.max_batch_size) {
-                let input: Vec<&str> = batch.to_vec();
                 let body_json = serde_json::json!({
                     "model": self.model,
-                    "input": input,
+                    "input": batch,
                     "dimensions": self.dimensions,
                 });
-
-                // Transient errors (429, 5xx) are retried with exponential backoff
                 let mut last_err = String::new();
-                let mut success = false;
+                let mut batch_embeddings = None;
                 for attempt in 0..MAX_RETRIES {
                     if attempt > 0 {
                         let delay = INITIAL_BACKOFF_MS * 2u64.pow(attempt as u32 - 1);
@@ -154,50 +283,64 @@ impl EmbeddingProvider for ApiEmbeddingProvider {
                         );
                         tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
                     }
-
                     let request = xai_grok_http::shared_client()
                         .post(format!("{}/embeddings", self.api_base))
                         .json(&body_json)
                         .header("X-XAI-Token-Auth", "xai-grok-cli")
                         .header("x-grok-client-version", xai_grok_version::VERSION);
-
-                    let req = match request.build() {
-                        Ok(r) => r,
-                        Err(e) => {
-                            return Err(format!("failed to build embedding request: {e}").into());
-                        }
-                    };
+                    let req = request
+                        .build()
+                        .map_err(|error| format!("failed to build embedding request: {error}"))?;
                     let response = match self.client.execute(req).await {
-                        Ok(r) => r,
-                        Err(e) => {
-                            last_err = format!("request failed: {e}");
+                        Ok(response) => response,
+                        Err(error) => {
+                            last_err = format!("request failed: {error}");
                             continue;
                         }
                     };
-
                     let status = response.status();
                     if status.is_success() {
                         let body: serde_json::Value = response.json().await?;
                         let data = body
                             .get("data")
-                            .and_then(|d| d.as_array())
+                            .and_then(serde_json::Value::as_array)
                             .ok_or("embedding response missing 'data' array")?;
-
-                        for item in data {
-                            let embedding: Vec<f32> = item
-                                .get("embedding")
-                                .and_then(|e| e.as_array())
-                                .ok_or("embedding item missing 'embedding' array")?
-                                .iter()
-                                .filter_map(|v| v.as_f64().map(|f| f as f32))
-                                .collect();
-                            all_embeddings.push(embedding);
+                        if data.len() != batch.len() {
+                            return Err(format!(
+                                "embedding response count mismatch: expected {}, got {}",
+                                batch.len(),
+                                data.len()
+                            )
+                            .into());
                         }
-                        success = true;
+                        let mut embeddings = Vec::with_capacity(data.len());
+                        for item in data {
+                            let values = item
+                                .get("embedding")
+                                .and_then(serde_json::Value::as_array)
+                                .ok_or("embedding item missing 'embedding' array")?;
+                            let embedding = values
+                                .iter()
+                                .map(|value| {
+                                    value
+                                        .as_f64()
+                                        .map(|value| value as f32)
+                                        .ok_or("embedding item contains a non-numeric value")
+                                })
+                                .collect::<Result<Vec<_>, _>>()?;
+                            if embedding.len() != self.dimensions {
+                                return Err(format!(
+                                    "embedding dimension mismatch: expected {}, got {}",
+                                    self.dimensions,
+                                    embedding.len()
+                                )
+                                .into());
+                            }
+                            embeddings.push(embedding);
+                        }
+                        batch_embeddings = Some(embeddings);
                         break;
                     }
-
-                    // Retry on 429 (rate limit) or 5xx (server error)
                     if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
                     {
                         last_err = format!(
@@ -206,35 +349,28 @@ impl EmbeddingProvider for ApiEmbeddingProvider {
                         );
                         continue;
                     }
-
-                    // Any other status is not retryable, so fail immediately
                     let body = response.text().await.unwrap_or_default();
                     return Err(format!("embedding API error {status}: {body}").into());
                 }
-
-                if !success {
+                let Some(embeddings) = batch_embeddings else {
                     return Err(format!(
                         "embedding API failed after {MAX_RETRIES} attempts: {last_err}"
                     )
                     .into());
-                }
+                };
+                all_embeddings.extend(embeddings);
             }
-
+            if all_embeddings.len() != texts.len() {
+                return Err("embedding response count did not match input count".into());
+            }
+            guard.succeed();
             Ok(all_embeddings)
         })
         .await
         .map_err(|_| Box::<dyn std::error::Error>::from("embedding request timed out"))?
     }
-    // ZMY SELF-ADDED CODE END
-
-    fn model_name(&self) -> &str {
-        &self.model
-    }
-
-    fn dimensions(&self) -> usize {
-        self.dimensions
-    }
 }
+// ZMY SELF-ADDED CODE END
 
 /// A mock provider for tests: each vector is derived from the blake3 hash of the text, so results are deterministic.
 #[cfg(any(test, feature = "test-support"))]
@@ -415,6 +551,119 @@ mod tests {
         assert!(elapsed < std::time::Duration::from_secs(12));
         let _ = stop_tx.send(());
         server.join().unwrap();
+    }
+    // ZMY SELF-ADDED CODE END
+
+    // ZMY SELF-ADDED CODE START
+    #[tokio::test]
+    async fn fork_embedding_failure_circuit_is_shared_isolated_and_expires() {
+        use std::io::{Read, Write};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let requests = Arc::new(AtomicUsize::new(0));
+        let server_requests = requests.clone();
+        let server = std::thread::spawn(move || {
+            for request_number in 0..3 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0_u8; 4096];
+                let _ = stream.read(&mut request);
+                server_requests.fetch_add(1, Ordering::SeqCst);
+                if request_number == 0 {
+                    stream
+                        .write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                        .unwrap();
+                } else {
+                    let body = br#"{"data":[{"embedding":[0.25,0.5]}]}"#;
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    )
+                    .unwrap();
+                    stream.write_all(body).unwrap();
+                }
+            }
+        });
+        let endpoint = format!("http://{address}/v1");
+        let make_provider = |model: &str| {
+            ApiEmbeddingProvider::new(
+                endpoint.clone(),
+                model.to_owned(),
+                2,
+                reqwest_middleware::ClientBuilder::new(reqwest::Client::new()).build(),
+            )
+        };
+        let cooldown = std::time::Duration::from_millis(80);
+        let failed = make_provider("same-model");
+        assert!(
+            failed
+                .embed_batch_with_policy(&["fail"], std::time::Duration::from_secs(1), cooldown)
+                .await
+                .is_err()
+        );
+
+        let reconstructed = make_provider("same-model");
+        let started = std::time::Instant::now();
+        assert!(
+            reconstructed
+                .embed_batch_with_policy(
+                    &["suppressed"],
+                    std::time::Duration::from_secs(1),
+                    cooldown
+                )
+                .await
+                .is_err()
+        );
+        assert!(started.elapsed() < std::time::Duration::from_millis(50));
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+
+        let other_model = make_provider("other-model");
+        assert!(
+            other_model
+                .embed_batch_with_policy(
+                    &["independent"],
+                    std::time::Duration::from_secs(1),
+                    cooldown
+                )
+                .await
+                .is_ok()
+        );
+        assert_ne!(
+            embedding_circuit_key(&endpoint, "same-model", 2),
+            embedding_circuit_key(&endpoint, "same-model", 3)
+        );
+        assert_ne!(
+            embedding_circuit_key(&endpoint, "same-model", 2),
+            embedding_circuit_key("http://127.0.0.1:1/v1", "same-model", 2)
+        );
+        tokio::time::sleep(cooldown + std::time::Duration::from_millis(20)).await;
+        let recovered = make_provider("same-model");
+        assert!(
+            recovered
+                .embed_batch_with_policy(
+                    &["recovered"],
+                    std::time::Duration::from_secs(1),
+                    cooldown
+                )
+                .await
+                .is_ok()
+        );
+        server.join().unwrap();
+        assert_eq!(requests.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn fork_embedding_circuit_rejects_concurrent_same_key() {
+        let key = embedding_circuit_key("http://127.0.0.1:0/v1", "concurrent", 4);
+        let request = EmbeddingRequestGuard::begin(key, EMBEDDING_FAILURE_COOLDOWN).unwrap();
+        assert!(EmbeddingRequestGuard::begin(key, EMBEDDING_FAILURE_COOLDOWN).is_err());
+        drop(request);
+        assert!(EmbeddingRequestGuard::begin(key, EMBEDDING_FAILURE_COOLDOWN).is_err());
     }
     // ZMY SELF-ADDED CODE END
 }
