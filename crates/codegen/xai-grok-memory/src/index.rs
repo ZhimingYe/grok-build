@@ -448,7 +448,7 @@ impl MemoryIndex {
         limit: usize,
         sources: &[&str],
     ) -> Result<Vec<FtsResult>, rusqlite::Error> {
-        if sources.is_empty() || limit == 0 || query.chars().count() > 1024 {
+        if sources.is_empty() || limit == 0 {
             return Ok(vec![]);
         }
         let fts_query = super::query_expansion::lexical_search_query(query);
@@ -496,7 +496,7 @@ impl MemoryIndex {
     }
 
     pub fn search_fts(&self, query: &str, limit: usize) -> Result<Vec<FtsResult>, rusqlite::Error> {
-        if limit == 0 || query.chars().count() > 1024 {
+        if limit == 0 {
             return Ok(vec![]);
         }
 
@@ -1869,6 +1869,7 @@ mod tests {
         let technical = tmp.path().join("technical.md");
         let plain_c = tmp.path().join("plain-c.md");
         let literal = tmp.path().join("literal.md");
+        let graphite = tmp.path().join("graphite.md");
         std::fs::write(&workspace, "# 部署\n\n部署").unwrap();
         std::fs::write(&global, "# Chinese requirement\n\n部署要求兼容旧系统。").unwrap();
         std::fs::write(
@@ -1882,11 +1883,17 @@ mod tests {
             "# Literal query\n\nThe exact input is \"the OR a++\"; payload %' OR 1=1 --.",
         )
         .unwrap();
+        std::fs::write(
+            &graphite,
+            "# Graphite deployment\n\nGraphite deployment notes for workspace memory.",
+        )
+        .unwrap();
         index.reindex_file(&workspace, "workspace").unwrap();
         index.reindex_file(&global, "global").unwrap();
         index.reindex_file(&technical, "workspace").unwrap();
         index.reindex_file(&plain_c, "workspace").unwrap();
         index.reindex_file(&literal, "workspace").unwrap();
+        index.reindex_file(&graphite, "workspace").unwrap();
 
         let chinese = index.search_fts("部署", 10).unwrap();
         assert_eq!(chinese.len(), 2);
@@ -1945,6 +1952,41 @@ mod tests {
             english
                 .iter()
                 .any(|result| result.chunk_id == format!("{}:0", technical.to_string_lossy()))
+        );
+        let graphite_id = format!("{}:0", graphite.to_string_lossy());
+        let long_prompt = format!(
+            "graphite deployment {}",
+            "conversational context ".repeat(60)
+        );
+        assert!(long_prompt.chars().count() > 1200);
+        assert!(
+            index
+                .search_fts(&long_prompt, 10)
+                .unwrap()
+                .iter()
+                .any(|result| result.chunk_id == graphite_id)
+        );
+        assert!(
+            index
+                .search_fts_by_sources(&long_prompt, 10, &["workspace"])
+                .unwrap()
+                .iter()
+                .any(|result| result.chunk_id == graphite_id)
+        );
+        let overlong_token_prompt = format!("{} graphite deployment", "x".repeat(1025));
+        assert!(
+            index
+                .search_fts(&overlong_token_prompt, 10)
+                .unwrap()
+                .iter()
+                .any(|result| result.chunk_id == graphite_id)
+        );
+        assert!(
+            index
+                .search_fts_by_sources(&overlong_token_prompt, 10, &["workspace"])
+                .unwrap()
+                .iter()
+                .any(|result| result.chunk_id == graphite_id)
         );
         assert!(index.search_fts("   ", 10).unwrap().is_empty());
         assert!(index.search_fts("++---", 10).unwrap().is_empty());
