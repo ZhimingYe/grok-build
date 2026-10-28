@@ -57,6 +57,11 @@ pub fn load_media_tool_config(
 
 pub fn image_gen_config(cfg: &Config, credentials: &MediaToolCredentials) -> ImageGenConfig {
     let base_url = cfg.endpoints.xai_api_base_url.clone();
+    // ZMY SELF-ADDED CODE START
+    if xai_grok_env::is_official_service_url(&base_url) {
+        return ImageGenConfig::Disabled;
+    }
+    // ZMY SELF-ADDED CODE END
     ImageGenConfig::Enabled {
         api_key: credentials.static_bearer.clone(),
         extra_headers: media_headers(cfg, &base_url),
@@ -73,6 +78,12 @@ pub fn video_gen_config(cfg: &Config, credentials: &MediaToolCredentials) -> Vid
     if !cfg.resolve_video_gen().value {
         return VideoGenConfig::Disabled;
     }
+    // ZMY SELF-ADDED CODE START
+    let base_url = cfg.endpoints.xai_api_base_url.clone();
+    if xai_grok_env::is_official_service_url(&base_url) {
+        return VideoGenConfig::Disabled;
+    }
+    // ZMY SELF-ADDED CODE END
     let zdr_video_output_s3 = cfg
         .disable_zdr_incompatible_tools
         .then(|| cfg.zdr_video_output_s3.clone())
@@ -83,7 +94,9 @@ pub fn video_gen_config(cfg: &Config, credentials: &MediaToolCredentials) -> Vid
     if zdr_restricted {
         tracing::info!("video_gen zdr-restricted by tools.disable_zdr_incompatible_tools");
     }
-    let base_url = cfg.endpoints.xai_api_base_url.clone();
+    // ZMY SELF-ADDED CODE START
+    // Resolve base_url before the official-service gate above, not here.
+    // ZMY SELF-ADDED CODE END
     VideoGenConfig::Enabled {
         api_key: credentials.static_bearer.clone(),
         extra_headers: media_headers(cfg, &base_url),

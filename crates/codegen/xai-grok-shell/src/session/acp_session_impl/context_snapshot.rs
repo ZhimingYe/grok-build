@@ -279,6 +279,11 @@ async fn tokenize_one(
     model: &str,
     text: &str,
 ) -> Option<u64> {
+    // ZMY SELF-ADDED CODE START
+    if xai_grok_env::is_official_service_url(url) {
+        return None;
+    }
+    // ZMY SELF-ADDED CODE END
     let Ok(auth) = reqwest::header::HeaderValue::from_str(&format!("Bearer {api_key}")) else {
         tracing::debug!("session_context_snapshot: invalid api key header");
         return None;
@@ -426,6 +431,21 @@ mod tests {
         };
         assert!(matches!(job.field, TokenizeField::Tools));
     }
+
+    // ZMY SELF-ADDED CODE START
+    #[tokio::test]
+    async fn fork_tokenize_rejects_official_endpoint_locally() {
+        let result = tokenize_one(
+            &reqwest::Client::new(),
+            "https://api.x.ai/v1/tokenize-text",
+            "session-token",
+            "grok-4.6",
+            "text",
+        )
+        .await;
+        assert!(result.is_none());
+    }
+    // ZMY SELF-ADDED CODE END
 
     #[test]
     fn snapshot_uses_tokenizer_counts_not_bytes4() {

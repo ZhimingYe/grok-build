@@ -492,13 +492,16 @@ impl BatchDreamStore {
     ) -> Result<()> {
         let index_error = |error: rusqlite::Error| BatchDreamError::Database(error);
         let storage = MemoryStorage::new_flat(&self.scope_dir, &self.scope_dir);
-        let mut index = MemoryIndex::open_or_create(
+        // ZMY SELF-ADDED CODE START
+        // Avoid forcing a lexical-only dimension that discards existing vectors.
+        let mut index = MemoryIndex::open_or_create_preserving_dimensions(
             &self.scope_dir.join("index.sqlite"),
             storage,
             xai_grok_config_types::MemoryIndexConfig::default(),
-            1,
+            1024,
         )
         .map_err(index_error)?;
+        // ZMY SELF-ADDED CODE END
         let source = match self.scope {
             crate::V2MemoryScope::Global => "global",
             crate::V2MemoryScope::Workspace => "workspace",

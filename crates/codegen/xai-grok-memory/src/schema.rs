@@ -46,6 +46,10 @@ INSERT OR IGNORE INTO meta(key, value) VALUES ('reindex_claim', '');
 "#
     );
 
+    // ZMY SELF-ADDED CODE START
+    sql.push_str("CREATE TABLE IF NOT EXISTS embedding_invalidations (chunk_id TEXT PRIMARY KEY);");
+    // ZMY SELF-ADDED CODE END
+
     if vec_available {
         sql.push_str(&format!(
             "\nCREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(\n    \

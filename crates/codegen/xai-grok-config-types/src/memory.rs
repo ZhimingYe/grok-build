@@ -240,7 +240,9 @@ impl Default for MemoryIndexConfig {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct MemoryEmbeddingConfig {
-    /// Provider type: `"api"`, `"local"`, or `"auto"`.
+    // ZMY SELF-ADDED CODE START
+    /// Provider type: `"api"`, `"local"`, or `"auto"`; `"none"` forces lexical-only retrieval.
+    // ZMY SELF-ADDED CODE END
     pub provider: String,
     /// Model name for the embedding API. `None` disables vector embeddings.
     pub model: Option<String>,

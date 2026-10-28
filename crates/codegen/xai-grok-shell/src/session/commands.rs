@@ -934,14 +934,18 @@ pub enum SessionCommand {
         respond_to: oneshot::Sender<Option<String>>,
     },
     /// The session builds a compact text-only transcript of the recent conversation and makes one tool-free model call.
-    /// The call defaults to `grok-4.6` when available via `model_override`, else it uses the session model.
+    // ZMY SELF-ADDED CODE START
+    /// Uses the explicit model override when provided, otherwise the current session model.
+    // ZMY SELF-ADDED CODE END
     /// Best-effort: any failure returns `None`.
     SuggestPrompt {
         model_override: Option<String>,
         respond_to: oneshot::Sender<Option<String>>,
     },
     /// Rewrite a raw memory note into well-structured markdown via a one-shot LLM call.
-    /// The session uses `prepare_chat_completion()` with the `grok-4.6` model, low temperature, and capped output tokens.
+    // ZMY SELF-ADDED CODE START
+    /// Uses the current session model with low temperature and capped output tokens.
+    // ZMY SELF-ADDED CODE END
     RewriteMemoryNote {
         raw_text: String,
         context_summary: String,

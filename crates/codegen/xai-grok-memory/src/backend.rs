@@ -161,14 +161,11 @@ async fn build_embedding_provider(
     base_url: &str,
 ) -> Option<super::embedding::ApiEmbeddingProvider> {
     // ZMY SELF-ADDED CODE START
-    if xai_grok_env::is_official_service_url(base_url) {
+    let config = config?;
+    if !super::embedding::ApiEmbeddingProvider::is_configured(config, base_url) {
         return None;
     }
     // ZMY SELF-ADDED CODE END
-    let config = config?;
-    if config.model.as_ref().is_none_or(|m| m.is_empty()) {
-        return None;
-    }
 
     // Enforce at runtime, in release too: a `debug_assert` compiles out of shipped binaries and lets a scoped credential reach an unapproved URL
     let credentials_approved = credentials.approved_for(base_url);
@@ -182,12 +179,15 @@ async fn build_embedding_provider(
     }
 
     if credentials_approved && let Some(creds) = credentials.auth_credentials() {
+        // ZMY SELF-ADDED CODE START
         let client = super::embedding::build_middleware_client(creds.clone());
-        return super::embedding::ApiEmbeddingProvider::from_config(
+        return super::embedding::ApiEmbeddingProvider::from_config_with_credentials(
             config,
             base_url.to_owned(),
             client,
+            creds.clone(),
         );
+        // ZMY SELF-ADDED CODE END
     }
 
     let per_call_key = if credentials_approved && let Some(p) = credentials.api_key_provider() {
@@ -339,13 +339,27 @@ impl MemoryBackend for MemoryBackendImpl {
         let query_length = query.len();
         let keyword_count = super::query_expansion::extract_keywords(query).len();
 
-        let embed_dims = self.embed_config.as_ref().map_or(1024, |ec| ec.dimensions);
-        let mut index = match super::index::MemoryIndex::open_or_create(
-            &self.db_path,
-            self.storage.clone(),
-            xai_grok_config_types::MemoryIndexConfig::default(),
-            embed_dims,
-        ) {
+        // ZMY SELF-ADDED CODE START
+        let mut provider = self.make_embedding_provider().await;
+        let embed_dims = provider
+            .as_ref()
+            .map_or(1024, |provider| provider.dimensions());
+        let open_index = if provider.is_some() {
+            super::index::MemoryIndex::open_or_create(
+                &self.db_path,
+                self.storage.clone(),
+                xai_grok_config_types::MemoryIndexConfig::default(),
+                embed_dims,
+            )
+        } else {
+            super::index::MemoryIndex::open_or_create_preserving_dimensions(
+                &self.db_path,
+                self.storage.clone(),
+                xai_grok_config_types::MemoryIndexConfig::default(),
+                1024,
+            )
+        };
+        let mut index = match open_index {
             Ok(index) => index,
             Err(error) => {
                 self.observation_sink
@@ -365,6 +379,10 @@ impl MemoryBackend for MemoryBackendImpl {
                 return Err(Box::new(std::io::Error::other(error.to_string())));
             }
         };
+        if !index.vec_available() {
+            provider = None;
+        }
+        // ZMY SELF-ADDED CODE END
 
         // ── Sync phase 1: reindex dirty files, collect chunks needing embeddings ──
         let mut reindex_chunks: Vec<(String, String)> = Vec::new();
@@ -397,35 +415,60 @@ impl MemoryBackend for MemoryBackendImpl {
                     }
                 }
             }
-            if dirty_count > 0 {
+            // ZMY SELF-ADDED CODE START
+            if dirty_count > 0 && provider.is_some() {
                 reindex_chunks = index.chunks_without_embeddings().unwrap_or_default();
             }
+            // ZMY SELF-ADDED CODE END
             watcher_sync_stats = Some((dirty_count, changed_chunk_count, sync_start));
         }
 
         // ── Async phase: embed missing chunks (no &index borrow) ──
-        let provider = self.make_embedding_provider().await;
+        // ZMY SELF-ADDED CODE START
+        // Provider construction moved before index open so FTS-only searches preserve vector dimensions.
+        // ZMY SELF-ADDED CODE END
+        // ZMY SELF-ADDED CODE START
         let mut embedded_count: usize = 0;
+        let mut embedding_batch_failed = false;
+        // ZMY SELF-ADDED CODE END
+        // ZMY SELF-ADDED CODE START
+        let embedding_deadline =
+            tokio::time::Instant::now() + super::search::INTERACTIVE_EMBEDDING_BUDGET;
+        // ZMY SELF-ADDED CODE END
         if !reindex_chunks.is_empty()
             && let Some(ref provider) = provider
         {
             let mut upserts: Vec<(String, Vec<f32>)> = Vec::new();
             for batch in reindex_chunks.chunks(32) {
                 let texts: Vec<&str> = batch.iter().map(|(_, t)| t.as_str()).collect();
-                match provider.embed_batch(&texts).await {
-                    Ok(embeddings) => {
+                // ZMY SELF-ADDED CODE START
+                match tokio::time::timeout_at(embedding_deadline, provider.embed_batch(&texts))
+                    .await
+                {
+                    Ok(Ok(embeddings)) => {
                         for ((chunk_id, _), emb) in batch.iter().zip(embeddings.into_iter()) {
                             upserts.push((chunk_id.clone(), emb));
                         }
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         tracing::warn!(
                             target: crate::MEMORY_LOG_TARGET,
                             error = %e,
                             "embedding batch failed during sync-on-search, skipping"
                         );
+                        embedding_batch_failed = true;
+                        break;
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            target: crate::MEMORY_LOG_TARGET,
+                            "embedding batch exceeded the interactive budget"
+                        );
+                        embedding_batch_failed = true;
+                        break;
                     }
                 }
+                // ZMY SELF-ADDED CODE END
             }
             // Sync: upsert embeddings back (borrows &index, no await)
             for (chunk_id, emb) in &upserts {
@@ -464,14 +507,22 @@ impl MemoryBackend for MemoryBackendImpl {
         );
 
         // ── Async phase: embed query for vector search (no &index borrow) ──
-        let query_embedding = super::search::resolve_query_embedding(
+        // ZMY SELF-ADDED CODE START
+        let query_provider = if embedding_batch_failed {
+            None
+        } else {
             provider
                 .as_ref()
-                .map(|provider| provider as &dyn super::embedding::EmbeddingProvider),
+                .map(|provider| provider as &dyn super::embedding::EmbeddingProvider)
+        };
+        let query_embedding = super::search::resolve_query_embedding_until(
+            query_provider,
             index.vec_available(),
             query,
+            embedding_deadline,
         )
         .await;
+        // ZMY SELF-ADDED CODE END
 
         // ── Sync phase 3: vector search + scoring + merge (borrows &index) ──
         let merged = super::search::hybrid_search_merge(
@@ -916,6 +967,388 @@ mod factory_tests {
         );
     }
 
+    // ZMY SELF-ADDED CODE START
+    #[tokio::test]
+    async fn fork_fts_only_config_matrix_preserves_cache_and_lifecycle() {
+        use std::io::{Read, Write};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        };
+
+        init_sqlite_vec();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let requests = Arc::new(AtomicUsize::new(0));
+        let stopped = Arc::new(AtomicBool::new(false));
+        let server_requests = requests.clone();
+        let server_stopped = stopped.clone();
+        let server = std::thread::spawn(move || {
+            while !server_stopped.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        server_requests.fetch_add(1, Ordering::SeqCst);
+                        let mut request = [0_u8; 2048];
+                        let _ = stream.read(&mut request);
+                        let _ = stream.write_all(
+                            b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        );
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(2));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        let local_url = format!("http://{address}/v1");
+        let mut cases = vec![
+            (None, local_url.clone(), Some("stale-key".to_owned())),
+            (
+                Some(MemoryEmbeddingConfig::default()),
+                local_url.clone(),
+                Some("stale-key".to_owned()),
+            ),
+            (
+                Some(MemoryEmbeddingConfig {
+                    model: Some(String::new()),
+                    ..Default::default()
+                }),
+                local_url.clone(),
+                Some("stale-key".to_owned()),
+            ),
+            (
+                Some(MemoryEmbeddingConfig {
+                    model: Some("   ".to_owned()),
+                    ..Default::default()
+                }),
+                local_url.clone(),
+                Some("stale-key".to_owned()),
+            ),
+            (
+                Some(MemoryEmbeddingConfig {
+                    provider: "none".to_owned(),
+                    model: Some("stale-model".to_owned()),
+                    dimensions: 0,
+                }),
+                local_url.clone(),
+                Some("stale-key".to_owned()),
+            ),
+            (
+                Some(MemoryEmbeddingConfig {
+                    provider: "none".to_owned(),
+                    model: Some("stale-model".to_owned()),
+                    dimensions: 4,
+                }),
+                local_url.clone(),
+                Some("stale-key".to_owned()),
+            ),
+            (
+                Some(MemoryEmbeddingConfig {
+                    provider: "api".to_owned(),
+                    model: Some("configured".to_owned()),
+                    dimensions: 0,
+                }),
+                local_url.clone(),
+                Some("stale-key".to_owned()),
+            ),
+            (
+                Some(MemoryEmbeddingConfig {
+                    model: Some("configured".to_owned()),
+                    ..Default::default()
+                }),
+                local_url.clone(),
+                None,
+            ),
+            (
+                Some(MemoryEmbeddingConfig {
+                    model: Some("configured".to_owned()),
+                    ..Default::default()
+                }),
+                "https://api.x.ai/v1".to_owned(),
+                None,
+            ),
+        ];
+        for (case, base_url, api_key) in cases.drain(..) {
+            let tmp = TempDir::new().unwrap();
+            let storage = make_storage(&tmp);
+            let db_path = storage.workspace_dir().join("index.sqlite");
+            let file = tmp.path().join("note.md");
+            std::fs::write(&file, "# Existing\n\nstable lifecycle keyword").unwrap();
+            let mut index = MemoryIndex::open_or_create(
+                &db_path,
+                storage.clone(),
+                xai_grok_config_types::MemoryIndexConfig::default(),
+                4,
+            )
+            .unwrap();
+            assert!(index.vec_available(), "matrix requires sqlite-vec");
+            index.reindex_file(&file, "workspace").unwrap();
+            let (chunk_id, _) = index
+                .chunks_without_embeddings()
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap();
+            index
+                .upsert_embedding(&chunk_id, &[0.1, 0.2, 0.3, 0.4])
+                .unwrap();
+            drop(index);
+
+            let params = MemoryBackendParams {
+                embed_config: case,
+                embed_base_url: base_url,
+                embed_api_key: api_key,
+                ..make_params_fts_only("fork-fts-only")
+            };
+            let backend = MemoryBackendImpl::from_session_params(storage.clone(), &params);
+            assert!(
+                !backend
+                    .search("stable lifecycle", 5, 0.0)
+                    .await
+                    .unwrap()
+                    .is_empty(),
+                "FTS must work without an embedding provider"
+            );
+            drop(backend);
+            let mut index = MemoryIndex::open_or_create_preserving_dimensions(
+                &db_path,
+                storage.clone(),
+                Default::default(),
+                1024,
+            )
+            .unwrap();
+            assert_eq!(index.embedding_dimensions(), 4);
+            assert_eq!(
+                index
+                    .db()
+                    .query_row("SELECT COUNT(*) FROM chunks_vec", [], |row| row
+                        .get::<_, i64>(0))
+                    .unwrap(),
+                1
+            );
+            std::fs::write(&file, "# Updated\n\nreplacement lifecycle keyword").unwrap();
+            index.reindex_file(&file, "workspace").unwrap();
+            assert!(
+                !index
+                    .search_fts("replacement lifecycle", 5)
+                    .unwrap()
+                    .is_empty()
+            );
+            index.delete_path(&file).unwrap();
+            drop(index);
+            let reopened = MemoryIndex::open_or_create_preserving_dimensions(
+                &db_path,
+                storage,
+                Default::default(),
+                1024,
+            )
+            .unwrap();
+            assert!(
+                reopened
+                    .search_fts("replacement lifecycle", 5)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        stopped.store(true, Ordering::SeqCst);
+        server.join().unwrap();
+        assert_eq!(requests.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn fork_embedding_http_failure_keeps_fts_results() {
+        use std::io::{Read, Write};
+
+        init_sqlite_vec();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 2048];
+            let _ = stream.read(&mut request);
+            let _ = stream.write_all(
+                b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+        });
+        let tmp = TempDir::new().unwrap();
+        let storage = make_storage(&tmp);
+        let db_path = storage.workspace_dir().join("index.sqlite");
+        let mut index =
+            MemoryIndex::open_or_create(&db_path, storage.clone(), Default::default(), 4).unwrap();
+        assert!(index.vec_available());
+        let file = tmp.path().join("note.md");
+        std::fs::write(&file, "# HTTP failure\n\nlexical fallback keyword").unwrap();
+        index.reindex_file(&file, "workspace").unwrap();
+        drop(index);
+        let params = MemoryBackendParams {
+            embed_config: Some(MemoryEmbeddingConfig {
+                model: Some("local-model".to_owned()),
+                dimensions: 4,
+                ..Default::default()
+            }),
+            embed_base_url: format!("http://{address}/v1"),
+            embed_api_key: Some("local-key".to_owned()),
+            ..make_params_fts_only("fork-http-failure")
+        };
+        let backend = MemoryBackendImpl::from_session_params(storage, &params);
+        let results = backend.search("lexical fallback", 5, 0.0).await.unwrap();
+        assert!(!results.is_empty());
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn fork_sync_embedding_failure_skips_query_embedding() {
+        use std::io::{Read, Write};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        };
+
+        init_sqlite_vec();
+        let tmp = TempDir::new().unwrap();
+        let storage = make_storage(&tmp);
+        let db_path = storage.workspace_dir().join("index.sqlite");
+        let index =
+            MemoryIndex::open_or_create(&db_path, storage.clone(), Default::default(), 4).unwrap();
+        assert!(index.vec_available());
+        drop(index);
+        let Some(watcher) = crate::watcher::MemoryFileWatcher::start(&storage.workspace_dir())
+        else {
+            return;
+        };
+        let file = storage.workspace_dir().join("sync-failure.md");
+        std::fs::write(&file, "# Dirty memory\n\nsync failure lexical token").unwrap();
+        for _ in 0..100 {
+            if watcher.is_dirty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(
+            watcher.is_dirty(),
+            "watcher should observe the new memory file"
+        );
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let requests = Arc::new(AtomicUsize::new(0));
+        let stopped = Arc::new(AtomicBool::new(false));
+        let server_requests = requests.clone();
+        let server_stopped = stopped.clone();
+        let server = std::thread::spawn(move || {
+            while !server_stopped.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        server_requests.fetch_add(1, Ordering::SeqCst);
+                        let mut request = [0_u8; 2048];
+                        let _ = stream.read(&mut request);
+                        let _ = stream.write_all(
+                            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        );
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(2));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        let params = MemoryBackendParams {
+            embed_config: Some(MemoryEmbeddingConfig {
+                model: Some("local-model".to_owned()),
+                dimensions: 4,
+                ..Default::default()
+            }),
+            embed_base_url: format!("http://{address}/v1"),
+            embed_api_key: Some("local-key".to_owned()),
+            watcher: Some(Arc::new(watcher)),
+            ..make_params_fts_only("fork-sync-failure")
+        };
+        let backend = MemoryBackendImpl::from_session_params(storage, &params);
+        assert!(
+            !backend
+                .search("sync failure lexical", 5, 0.0)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        stopped.store(true, Ordering::SeqCst);
+        server.join().unwrap();
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn fork_stalled_interactive_query_keeps_fts_results_and_cools_down() {
+        use std::io::{Read, Write};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        init_sqlite_vec();
+        let tmp = TempDir::new().unwrap();
+        let storage = make_storage(&tmp);
+        let db_path = storage.workspace_dir().join("index.sqlite");
+        let mut index =
+            MemoryIndex::open_or_create(&db_path, storage.clone(), Default::default(), 4).unwrap();
+        let file = tmp.path().join("stalled.md");
+        std::fs::write(&file, "# Local result\n\nbounded stalled lexical result").unwrap();
+        index.reindex_file(&file, "workspace").unwrap();
+        drop(index);
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let requests = Arc::new(AtomicUsize::new(0));
+        let server_requests = requests.clone();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            server_requests.fetch_add(1, Ordering::SeqCst);
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(1)))
+                .unwrap();
+            let mut request = [0_u8; 4096];
+            let _ = stream.read(&mut request);
+            std::thread::sleep(std::time::Duration::from_millis(3000));
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        });
+        let params = MemoryBackendParams {
+            embed_config: Some(MemoryEmbeddingConfig {
+                model: Some("stalled-local-model".to_owned()),
+                dimensions: 4,
+                ..Default::default()
+            }),
+            embed_base_url: format!("http://{address}/v1"),
+            embed_api_key: Some("local-key".to_owned()),
+            ..make_params_fts_only("fork-stalled-query")
+        };
+        let backend = MemoryBackendImpl::from_session_params(storage, &params);
+        let started = std::time::Instant::now();
+        let first = tokio::time::timeout(
+            std::time::Duration::from_millis(2800),
+            backend.search("bounded stalled lexical", 5, 0.0),
+        )
+        .await
+        .expect("interactive search should respect its shared deadline")
+        .unwrap();
+        assert!(
+            !first.is_empty(),
+            "FTS results must survive a stalled embedding"
+        );
+        assert!(started.elapsed() < std::time::Duration::from_millis(2600));
+        let second = backend
+            .search("bounded stalled lexical", 5, 0.0)
+            .await
+            .unwrap();
+        assert!(!second.is_empty());
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        server.join().unwrap();
+    }
+    // ZMY SELF-ADDED CODE END
+
     #[test]
     fn test_params_is_clone() {
         let params = make_params_fts_only("clone-test");
@@ -1269,10 +1702,9 @@ mod tests {
         );
     }
 
-    /// A trusted, URL-matching endpoint builds the provider from the refresh-capable session credential.
-    /// The per-call api-key provider is never consulted; it panics if resolved.
+    // ZMY SELF-ADDED CODE START
     #[tokio::test]
-    async fn test_trusted_endpoint_prefers_session_credential() {
+    async fn fork_trusted_custom_endpoint_prefers_session_credential() {
         struct StubAuth;
         impl xai_grok_auth::HttpAuth for StubAuth {
             fn apply(
@@ -1296,7 +1728,7 @@ mod tests {
         let auth: Arc<dyn xai_grok_auth::AuthCredentialProvider> = Arc::new(StubAuth);
         let api_key: xai_grok_tools::types::SharedApiKeyProvider = Arc::new(PanicKey);
         let scoped = EndpointScopedCredentials::for_endpoint(
-            "https://api.x.ai/v1",
+            "https://custom.example/v1",
             |_| true,
             Some(auth),
             Some(api_key),
@@ -1308,12 +1740,14 @@ mod tests {
             ..Default::default()
         };
         let provider =
-            build_embedding_provider(Some(&config), &scoped, None, "https://api.x.ai/v1").await;
+            build_embedding_provider(Some(&config), &scoped, None, "https://custom.example/v1")
+                .await;
         assert!(
             provider.is_some(),
-            "trusted endpoint must build a provider from the session credential"
+            "trusted custom endpoint must build a provider from the session credential"
         );
     }
+    // ZMY SELF-ADDED CODE END
 
     #[test]
     fn endpoint_scoped_credentials_trust_gate_and_url_match() {

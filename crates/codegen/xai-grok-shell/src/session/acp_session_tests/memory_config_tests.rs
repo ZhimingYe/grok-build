@@ -1123,6 +1123,174 @@ async fn create_injection_ready_actor(
         .replace_conversation(initial_conversation);
     actor
 }
+// ZMY SELF-ADDED CODE START
+#[tokio::test(flavor = "current_thread")]
+async fn fork_none_embedding_reindexes_and_injects_fts_context() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let mut actor = create_injection_ready_actor(vec![
+                xai_grok_sampling_types::ConversationItem::system("You are helpful."),
+                xai_grok_sampling_types::ConversationItem::user(
+                    "tell me about no embedding lifecycle",
+                ),
+            ])
+            .await;
+            let storage = actor.memory.storage().unwrap();
+            let file = storage.workspace_dir().join("none-provider.md");
+            std::fs::write(
+                &file,
+                "# No embedding\n\nThis lexical lifecycle remains searchable.",
+            )
+            .unwrap();
+            let params = actor.memory.backend_params.as_mut().unwrap();
+            params.embed_config = Some(crate::config::MemoryEmbeddingConfig {
+                provider: "none".to_owned(),
+                model: Some("stale-model".to_owned()),
+                dimensions: 4,
+            });
+            params.embed_api_key = Some("stale-key".to_owned());
+            actor.memory.reindex_and_embed(&file, "workspace").await;
+            let index = actor.memory.open_index(&storage).unwrap();
+            assert!(
+                !index
+                    .search_fts("lexical lifecycle", 10)
+                    .unwrap()
+                    .is_empty()
+            );
+            drop(index);
+            let reminder = actor
+                .first_turn_memory_reminder()
+                .await
+                .expect("FTS-only memory should inject context");
+            assert!(reminder.contains("lexical lifecycle"));
+        })
+        .await;
+}
+// ZMY SELF-ADDED CODE END
+
+// ZMY SELF-ADDED CODE START
+#[tokio::test(flavor = "current_thread")]
+async fn fork_reindex_and_embed_uses_provider_dimensions() {
+    use std::io::{Read, Write};
+
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let server = std::thread::spawn(move || {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                let (mut stream, _) = loop {
+                    match listener.accept() {
+                        Ok(connection) => break connection,
+                        Err(error)
+                            if error.kind() == std::io::ErrorKind::WouldBlock
+                                && std::time::Instant::now() < deadline =>
+                        {
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                        }
+                        Err(error) => panic!("mock embedding request was not received: {error}"),
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 4096];
+                loop {
+                    let bytes_read = stream.read(&mut buffer).unwrap();
+                    assert!(bytes_read > 0, "request body should complete");
+                    request.extend_from_slice(&buffer[..bytes_read]);
+                    let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n")
+                    else {
+                        continue;
+                    };
+                    let headers = std::str::from_utf8(&request[..header_end]).unwrap();
+                    let content_length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap();
+                    if request.len() >= header_end + 4 + content_length {
+                        break;
+                    }
+                }
+                let header_end = request.windows(4).position(|window| window == b"\r\n\r\n").unwrap();
+                let headers = std::str::from_utf8(&request[..header_end]).unwrap();
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap();
+                let request_body = &request[header_end + 4..header_end + 4 + content_length];
+                let request_json: serde_json::Value = serde_json::from_slice(request_body).unwrap();
+                let input_count = request_json["input"].as_array().unwrap().len();
+                let embedding = vec![0.25_f32; 8];
+                let data: Vec<_> = (0..input_count)
+                    .map(|_| serde_json::json!({ "embedding": embedding.clone() }))
+                    .collect();
+                let response_body = serde_json::json!({ "data": data }).to_string();
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    response_body.len()
+                )
+                .unwrap();
+                stream.write_all(response_body.as_bytes()).unwrap();
+                input_count
+            });
+
+            let mut actor = create_injection_ready_actor(vec![
+                xai_grok_sampling_types::ConversationItem::system("You are helpful."),
+                xai_grok_sampling_types::ConversationItem::user("embed with custom dimensions"),
+            ])
+            .await;
+            let storage = actor.memory.storage().unwrap();
+            let before = actor.memory.open_index(&storage).unwrap();
+            assert_eq!(before.embedding_dimensions(), 4);
+            drop(before);
+
+            let file = storage.workspace_dir().join("custom-dimensions.md");
+            std::fs::write(
+                &file,
+                "# Custom dimensions\n\nprovider dimension insertion token",
+            )
+            .unwrap();
+            let params = actor.memory.backend_params.as_mut().unwrap();
+            params.embed_config = Some(crate::config::MemoryEmbeddingConfig {
+                provider: "api".to_owned(),
+                model: Some("local-embedding".to_owned()),
+                dimensions: 8,
+            });
+            params.embed_base_url = format!("http://{address}/v1");
+            params.embed_api_key = Some("local-key".to_owned());
+
+            actor.memory.reindex_and_embed(&file, "workspace").await;
+            assert!(server.join().unwrap() > 0);
+
+            let index = actor.memory.open_index(&storage).unwrap();
+            assert!(index.vec_available());
+            assert_eq!(index.embedding_dimensions(), 8);
+            assert!(index.chunks_without_embeddings().unwrap().is_empty());
+            assert!(
+                !index
+                    .search_fts("provider dimension insertion", 10)
+                    .unwrap()
+                    .is_empty()
+            );
+        })
+        .await;
+}
+// ZMY SELF-ADDED CODE END
+
 #[tokio::test(flavor = "current_thread")]
 async fn test_first_turn_reminder_injects_without_persisted_block() {
     let local = tokio::task::LocalSet::new();

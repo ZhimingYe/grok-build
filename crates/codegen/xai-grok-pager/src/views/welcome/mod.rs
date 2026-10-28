@@ -1771,13 +1771,20 @@ fn render_welcome_done(
     } else {
         0
     };
-    let changelog_height = if p.has_access && !show_picker && !p.changelog_bullets.is_empty() {
-        2 + p.changelog_bullets.len() as u16
-    } else {
-        0
-    };
-    // Changelog is reachable via this menu row (ctrl+l). Show from the first frame so the menu doesn't shift while the CDN fetch completes.
-    let show_changelog_action = p.has_access && !show_picker;
+    // ZMY SELF-ADDED CODE START
+    let changelog_enabled =
+        xai_grok_config::Distribution::current().allows(xai_grok_config::Capability::RemoteFetch);
+    let changelog_height =
+        if changelog_enabled && p.has_access && !show_picker && !p.changelog_bullets.is_empty() {
+            2 + p.changelog_bullets.len() as u16
+        } else {
+            0
+        };
+    // ZMY SELF-ADDED CODE END
+    // ZMY SELF-ADDED CODE START
+    // Do not advertise the disabled upstream changelog, even before a fetch finishes.
+    let show_changelog_action = changelog_enabled && p.has_access && !show_picker;
+    // ZMY SELF-ADDED CODE END
 
     let gate_menu;
     let owned_menu;
@@ -2962,6 +2969,31 @@ mod tests {
         buffer_text(&buf)
     }
 
+    // ZMY SELF-ADDED CODE START
+    #[test]
+    fn fork_welcome_hides_changelog_even_with_cached_bullets() {
+        let auth = AuthState::Done;
+        let trust = TrustState::Done;
+        let mut params = render_params(&auth, &trust, None);
+        let bullets = vec!["Cached upstream announcement".to_owned()];
+        params.changelog_bullets = &bullets;
+        params.changelog_has_full_notes = true;
+        let area = Rect::new(0, 0, 100, 40);
+        let mut buf = Buffer::empty(area);
+        let result = render_welcome(
+            area,
+            &mut buf,
+            &params,
+            &mut PromptWidget::new(),
+            &mut PickerState::default(),
+        );
+        assert!(!result.changelog_action_present);
+        let text = buffer_text(&buf);
+        assert!(!text.contains("Changelog"), "{text}");
+        assert!(!text.contains("Cached upstream announcement"), "{text}");
+    }
+    // ZMY SELF-ADDED CODE END
+
     #[test]
     fn foreign_resume_tip_names_each_tool_and_age() {
         use xai_grok_foreign_sessions::ForeignSessionTool;
@@ -2984,6 +3016,7 @@ mod tests {
             // ZMY SELF-ADDED CODE START
             assert!(text.contains("Welcome to lightbuild!"), "{text}");
             assert!(!text.contains("/feedback"), "{text}");
+            assert!(!text.contains("Changelog"), "{text}");
             // ZMY SELF-ADDED CODE END
             assert!(text.contains(&format!("Coming from {label}?")), "{text}");
             assert!(text.contains("2m ago"), "{text}");

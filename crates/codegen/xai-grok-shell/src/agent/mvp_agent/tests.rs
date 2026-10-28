@@ -5219,6 +5219,24 @@ fn fork_accountless_env(grok_home: &std::path::Path) -> Vec<xai_grok_test_suppor
 }
 
 fn build_accountless_agent_with_local_model(api_key_auth_disabled: bool) -> MvpAgent {
+    build_accountless_agent_with_model_endpoint(
+        api_key_auth_disabled,
+        Some("http://127.0.0.1:9999/v1"),
+    )
+}
+
+fn build_accountless_agent_with_model_endpoint(
+    api_key_auth_disabled: bool,
+    endpoint: Option<&str>,
+) -> MvpAgent {
+    build_accountless_agent_with_summary(api_key_auth_disabled, endpoint, false)
+}
+
+fn build_accountless_agent_with_summary(
+    api_key_auth_disabled: bool,
+    endpoint: Option<&str>,
+    broken_summary: bool,
+) -> MvpAgent {
     use crate::agent::config::{Config, ModelEntry};
     use xai_grok_login::AuthManager;
     let mut cfg = Config::default();
@@ -5227,8 +5245,20 @@ fn build_accountless_agent_with_local_model(api_key_auth_disabled: bool) -> MvpA
     let auth_manager =
         std::sync::Arc::new(AuthManager::new(&grok_home, cfg.grok_com_config.clone()));
     let mut model = ModelEntry::fallback("test-model", &cfg.endpoints);
-    model.info.base_url = "http://127.0.0.1:9999/v1".to_owned();
-    let models = indexmap::IndexMap::from([("test-model".to_owned(), model)]);
+    if let Some(endpoint) = endpoint {
+        model.info.base_url = endpoint.to_owned();
+    }
+    let mut models = indexmap::IndexMap::from([("test-model".to_owned(), model)]);
+    if broken_summary {
+        let mut auxiliary = ModelEntry::fallback("broken-summary", &cfg.endpoints);
+        auxiliary.info.base_url = "http://127.0.0.1:9998/v1".to_owned();
+        auxiliary
+            .info
+            .extra_headers
+            .insert("invalid header name".to_owned(), "test".to_owned());
+        models.insert("broken-summary".to_owned(), auxiliary);
+        cfg.session_summary_model = Some("broken-summary".to_owned());
+    }
     let models_manager = crate::agent::remote_config::ModelsManager::new(
         Some(models.clone()),
         models,
@@ -5318,6 +5348,97 @@ fn fork_accountless_session_is_rejected_when_api_key_auth_is_disabled() {
                 Some("no auth method id provided"),
                 err.data.as_ref().and_then(|data| data.as_str())
             );
+        })
+    });
+}
+
+#[test]
+#[serial_test::serial]
+fn fork_accountless_default_endpoint_session_can_be_created_and_reloaded() {
+    let home = tempfile::tempdir().unwrap();
+    let _env = fork_accountless_env(home.path());
+    run_local_for_bridge_test(|| {
+        Box::pin(async move {
+            let cwd = tempfile::tempdir().unwrap();
+            let agent = build_accountless_agent_with_model_endpoint(false, None);
+            let config =
+                agent.resolve_sampling_config_for_model(&acp::ModelId::new("test-model"), None);
+            assert!(xai_grok_env::is_official_service_url(&config.base_url));
+            assert!(agent.build_summary_client(&config).unwrap().0.is_none());
+            let created = new_session_without_auth_method(&agent, cwd.path())
+                .await
+                .expect("local session creation must not require an official title model");
+            let sid = created.session_id;
+            drain_persistence(&agent, &sid).await;
+            agent.remove_session(&sid);
+            drop(agent);
+
+            let reopened = build_accountless_agent_with_model_endpoint(false, None);
+            initialize_accountless_session_agent(&reopened);
+            reopened
+                .load_session_inner(acp::LoadSessionRequest::new(
+                    sid.clone(),
+                    cwd.path().to_path_buf(),
+                ))
+                .await
+                .expect("local session reload must not require an official title model");
+            drain_persistence(&reopened, &sid).await;
+            reopened.remove_session(&sid);
+
+            let local = build_accountless_agent_with_local_model(false);
+            local.auth_manager.hot_swap(personal_xai_oauth_auth());
+            assert!(local.auth_manager.cached_official_auth_error().is_some());
+            let config =
+                local.resolve_sampling_config_for_model(&acp::ModelId::new("test-model"), None);
+            let (client, model) = local.build_summary_client(&config).unwrap();
+            assert!(client.is_some());
+            assert_eq!(
+                model, "test-model",
+                "fallback must keep the custom provider's model"
+            );
+            let created = new_session_without_auth_method(&local, cwd.path())
+                .await
+                .expect("cached official auth must not block a local model session");
+            drain_persistence(&local, &created.session_id).await;
+            local.remove_session(&created.session_id);
+        })
+    });
+}
+#[test]
+#[serial_test::serial]
+fn fork_broken_title_config_does_not_block_session_creation_or_reload() {
+    let home = tempfile::tempdir().unwrap();
+    let _env = fork_accountless_env(home.path());
+    run_local_for_bridge_test(|| {
+        Box::pin(async move {
+            for endpoint in [None, Some("http://127.0.0.1:9999/v1")] {
+                let cwd = tempfile::tempdir().unwrap();
+                let agent = build_accountless_agent_with_summary(false, endpoint, true);
+                let primary =
+                    agent.resolve_sampling_config_for_model(&acp::ModelId::new("test-model"), None);
+                let (client, model) = agent.build_summary_client(&primary).unwrap();
+                assert_eq!(client.is_some(), endpoint.is_some());
+                assert_eq!(model, primary.model);
+                let created = new_session_without_auth_method(&agent, cwd.path())
+                    .await
+                    .expect("a broken title model must not block session creation");
+                let sid = created.session_id;
+                drain_persistence(&agent, &sid).await;
+                agent.remove_session(&sid);
+                drop(agent);
+
+                let reopened = build_accountless_agent_with_summary(false, endpoint, true);
+                initialize_accountless_session_agent(&reopened);
+                reopened
+                    .load_session_inner(acp::LoadSessionRequest::new(
+                        sid.clone(),
+                        cwd.path().to_path_buf(),
+                    ))
+                    .await
+                    .expect("a broken title model must not block session reload");
+                drain_persistence(&reopened, &sid).await;
+                reopened.remove_session(&sid);
+            }
         })
     });
 }

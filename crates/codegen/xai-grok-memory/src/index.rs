@@ -113,12 +113,14 @@ impl MemoryIndex {
 
     /// Open an index for lexical-only maintenance without changing the vector
     /// dimension already recorded by the embedding backend.
-    pub(crate) fn open_or_create_preserving_dimensions(
+    // ZMY SELF-ADDED CODE START
+    pub fn open_or_create_preserving_dimensions(
         db_path: &Path,
         storage: MemoryStorage,
         config: MemoryIndexConfig,
         fallback_dimensions: usize,
     ) -> Result<Self, rusqlite::Error> {
+        // ZMY SELF-ADDED CODE END
         if let Some(parent) = db_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -141,16 +143,46 @@ impl MemoryIndex {
         } else {
             None
         };
-        let dimensions = match stored_dimensions {
-            Some(value) => value
-                .parse::<usize>()
-                .ok()
-                .filter(|dimensions| *dimensions > 0)
-                .ok_or(rusqlite::Error::InvalidQuery)?,
-            None => fallback_dimensions,
-        };
+        // ZMY SELF-ADDED CODE START
+        let fallback_dimensions = fallback_dimensions.max(1);
+        let dimensions = stored_dimensions
+            .as_deref()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|dimensions| *dimensions > 0);
+        let has_vec_table = db.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'chunks_vec'
+             )",
+            [],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if (stored_dimensions.is_some() && dimensions.is_none())
+            || (stored_dimensions.is_none() && has_vec_table)
+        {
+            return Self::initialize_fts_only(db, storage, config, fallback_dimensions);
+        }
+        let dimensions = dimensions.unwrap_or(fallback_dimensions);
+        // ZMY SELF-ADDED CODE END
         Self::initialize(db, storage, config, dimensions)
     }
+
+    // ZMY SELF-ADDED CODE START
+    fn initialize_fts_only(
+        db: rusqlite::Connection,
+        storage: MemoryStorage,
+        config: MemoryIndexConfig,
+        dimensions: usize,
+    ) -> Result<Self, rusqlite::Error> {
+        db.execute_batch(&schema::schema_sql(dimensions, false))?;
+        Ok(Self {
+            db,
+            storage,
+            chunk_config: config,
+            vec_available: false,
+            embedding_dimensions: dimensions,
+        })
+    }
+    // ZMY SELF-ADDED CODE END
 
     /// Open with an explicit journal mode. Tests use it to exercise the network-filesystem decision on a local disk.
     fn open_or_create_with_journal_mode(
@@ -172,7 +204,8 @@ impl MemoryIndex {
         dimensions: usize,
     ) -> Result<Self, rusqlite::Error> {
         // Check if sqlite-vec loaded (graceful fallback if not)
-        let vec_available =
+        // ZMY SELF-ADDED CODE START
+        let mut vec_available =
             match db.query_row("SELECT vec_version()", [], |r| r.get::<_, String>(0)) {
                 Ok(v) => {
                     tracing::info!(version = %v, "sqlite-vec loaded");
@@ -186,48 +219,39 @@ impl MemoryIndex {
                     false
                 }
             };
+        // ZMY SELF-ADDED CODE END
 
-        db.execute_batch(&schema::schema_sql(dimensions, vec_available))?;
-
-        // Store/verify embedding dimensions in meta table
-        let stored_dims: Option<String> = db
-            .query_row(schema::GET_META_SQL, params!["embedding_dimensions"], |r| {
-                r.get(0)
-            })
-            .ok();
-
-        match stored_dims {
-            Some(ref s) if s.parse::<usize>().ok() == Some(dimensions) => {
-                // Dimensions match, nothing to do
-            }
-            Some(ref s) => {
-                // Dimension mismatch, recreate vec table
-                tracing::warn!(
-                    stored = %s,
-                    requested = dimensions,
-                    "embedding dimension mismatch, recreating chunks_vec"
-                );
-                if vec_available {
-                    let _ = db.execute("DROP TABLE IF EXISTS chunks_vec", []);
-                    db.execute_batch(&format!(
-                        "CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(\n    \
-                         chunk_id TEXT PRIMARY KEY,\n    \
-                         embedding FLOAT[{dimensions}]\n);"
-                    ))?;
+        // ZMY SELF-ADDED CODE START
+        db.execute_batch(&schema::schema_sql(dimensions, false))?;
+        if vec_available {
+            let initialize_vectors = || -> Result<(), rusqlite::Error> {
+                let transaction = db.unchecked_transaction()?;
+                let stored_dims: Option<String> = transaction
+                    .query_row(schema::GET_META_SQL, params!["embedding_dimensions"], |r| {
+                        r.get(0)
+                    })
+                    .optional()?;
+                if stored_dims
+                    .as_ref()
+                    .is_none_or(|stored| stored.parse::<usize>().ok() != Some(dimensions))
+                {
+                    // Missing dimension metadata cannot vouch for cached vectors.
+                    transaction.execute("DROP TABLE IF EXISTS chunks_vec", [])?;
                 }
-                db.execute(
+                transaction.execute_batch(&schema::schema_sql(dimensions, true))?;
+                Self::purge_invalidated_embeddings(&transaction)?;
+                transaction.execute(
                     schema::UPSERT_META_SQL,
                     params!["embedding_dimensions", dimensions.to_string()],
                 )?;
-            }
-            None => {
-                // First time, store dimensions
-                db.execute(
-                    schema::UPSERT_META_SQL,
-                    params!["embedding_dimensions", dimensions.to_string()],
-                )?;
+                transaction.commit()
+            };
+            if let Err(error) = initialize_vectors() {
+                tracing::warn!(%error, "vector index unavailable; retaining full-text search");
+                vec_available = false;
             }
         }
+        // ZMY SELF-ADDED CODE END
 
         Ok(Self {
             db,
@@ -355,13 +379,10 @@ impl MemoryIndex {
                             params![rid, chunk.text],
                         )?;
                     }
-                    // Delete stale embedding (will be re-embedded later)
-                    if self.vec_available {
-                        let _ = tx.execute(
-                            "DELETE FROM chunks_vec WHERE chunk_id = ?1",
-                            params![chunk_id],
-                        );
-                    }
+                    // ZMY SELF-ADDED CODE START
+                    // Persist tombstones so failed vector deletes can be retried after recovery.
+                    Self::invalidate_embedding(&tx, &chunk_id, self.vec_available)?;
+                    // ZMY SELF-ADDED CODE END
                     result.updated += 1;
                 }
                 None => {
@@ -398,12 +419,10 @@ impl MemoryIndex {
                     "INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES('delete', ?1, ?2)",
                     params![old_record.rowid, old_record.text],
                 )?;
-                if self.vec_available {
-                    let _ = tx.execute(
-                        "DELETE FROM chunks_vec WHERE chunk_id = ?1",
-                        params![old_id],
-                    );
-                }
+                // ZMY SELF-ADDED CODE START
+                // Persist tombstones so failed vector deletes can be retried after recovery.
+                Self::invalidate_embedding(&tx, old_id, self.vec_available)?;
+                // ZMY SELF-ADDED CODE END
                 tx.execute("DELETE FROM chunks WHERE id = ?1", params![old_id])?;
                 result.removed += 1;
             }
@@ -417,76 +436,213 @@ impl MemoryIndex {
     // Search
     // -----------------------------------------------------------------------
 
-    /// FTS5 keyword search. Returns results ranked by BM25 score.
-    /// Applies stop word filtering to improve precision for conversational queries.
-    /// When all words are stop words, it returns empty results; the caller (`hybrid_search`) falls back to the vector search path.
+    // ZMY SELF-ADDED CODE START
+    /// FTS5 keyword search with a bounded literal fallback for non-tokenized text.
+    // Merge substring matches so FTS hits cannot hide valid literal matches.
     pub fn search_fts_by_sources(
         &self,
         query: &str,
         limit: usize,
         sources: &[&str],
     ) -> Result<Vec<FtsResult>, rusqlite::Error> {
-        if sources.is_empty() {
+        if sources.is_empty() || limit == 0 {
             return Ok(vec![]);
         }
-        let keywords = super::query_expansion::extract_keywords(query);
-        let fts_query = keywords.join(" OR ");
-        if fts_query.is_empty() {
-            return Ok(vec![]);
+        let fts_query = super::query_expansion::lexical_search_query(query);
+        let fts_results = if !fts_query.is_empty() {
+            let _g = tracing::info_span!("memory.fts_search").entered();
+            let placeholders: Vec<String> = sources
+                .iter()
+                .enumerate()
+                .map(|(i, _)| format!("?{}", i + 3))
+                .collect();
+            let sql = format!(
+                "SELECT f.rowid, f.rank FROM chunks_fts f \
+                 JOIN chunks c ON f.rowid = c.rowid \
+                 WHERE chunks_fts MATCH ?1 AND c.source IN ({}) \
+                 ORDER BY f.rank LIMIT ?2",
+                placeholders.join(", ")
+            );
+            let mut stmt = self.db.prepare(&sql)?;
+            let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+            params_vec.push(Box::new(fts_query));
+            params_vec.push(Box::new(limit as i64));
+            for source in sources {
+                params_vec.push(Box::new(source.to_string()));
+            }
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params_vec.iter().map(|param| param.as_ref()).collect();
+            let rows = stmt
+                .query_map(param_refs.as_slice(), |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            self.resolve_fts_rowids(rows)?
+        } else {
+            vec![]
+        };
+        if fts_results.is_empty() || Self::needs_literal_fallback(query) {
+            let literal_rank = Self::literal_rank(&fts_results);
+            let literal_results =
+                self.search_fts_substring(query, limit, Some(sources), literal_rank)?;
+            if !literal_results.is_empty() {
+                return Ok(Self::merge_fts_results(literal_results, fts_results, limit));
+            }
         }
-
-        let _g = tracing::info_span!("memory.fts_search").entered();
-        let placeholders: Vec<String> = sources
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("?{}", i + 3))
-            .collect();
-        let sql = format!(
-            "SELECT f.rowid, f.rank FROM chunks_fts f \
-             JOIN chunks c ON f.rowid = c.rowid \
-             WHERE chunks_fts MATCH ?1 AND c.source IN ({}) \
-             ORDER BY f.rank LIMIT ?2",
-            placeholders.join(", ")
-        );
-        let mut stmt = self.db.prepare(&sql)?;
-        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        params_vec.push(Box::new(fts_query));
-        params_vec.push(Box::new(limit as i64));
-        for s in sources {
-            params_vec.push(Box::new(s.to_string()));
-        }
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            params_vec.iter().map(|p| p.as_ref()).collect();
-
-        let rows = stmt
-            .query_map(param_refs.as_slice(), |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-
-        self.resolve_fts_rowids(rows)
+        Ok(fts_results)
     }
 
     pub fn search_fts(&self, query: &str, limit: usize) -> Result<Vec<FtsResult>, rusqlite::Error> {
-        let keywords = super::query_expansion::extract_keywords(query);
-        let fts_query = keywords.join(" OR ");
-        if fts_query.is_empty() {
+        if limit == 0 {
             return Ok(vec![]);
         }
 
-        let _g = tracing::info_span!("memory.fts_search").entered();
-        let mut stmt = self.db.prepare(
-            "SELECT rowid, rank FROM chunks_fts WHERE chunks_fts MATCH ?1 \
-             ORDER BY rank LIMIT ?2",
-        )?;
+        let fts_query = super::query_expansion::lexical_search_query(query);
+        let fts_results = if !fts_query.is_empty() {
+            let _g = tracing::info_span!("memory.fts_search").entered();
+            let mut stmt = self.db.prepare(
+                "SELECT rowid, rank FROM chunks_fts WHERE chunks_fts MATCH ?1 \
+                 ORDER BY rank LIMIT ?2",
+            )?;
+            let rows = stmt
+                .query_map(params![fts_query, limit], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            self.resolve_fts_rowids(rows)?
+        } else {
+            vec![]
+        };
+        if fts_results.is_empty() || Self::needs_literal_fallback(query) {
+            let literal_rank = Self::literal_rank(&fts_results);
+            let literal_results = self.search_fts_substring(query, limit, None, literal_rank)?;
+            if !literal_results.is_empty() {
+                return Ok(Self::merge_fts_results(literal_results, fts_results, limit));
+            }
+        }
+        Ok(fts_results)
+    }
+
+    fn needs_literal_fallback(query: &str) -> bool {
+        query.chars().any(|character| {
+            (!character.is_ascii() && character.is_alphanumeric())
+                || character.is_ascii_punctuation()
+        })
+    }
+
+    fn literal_rank(fts_results: &[FtsResult]) -> f64 {
+        fts_results
+            .iter()
+            .map(|result| result.rank)
+            .min_by(f64::total_cmp)
+            .map_or(-1.0e-6, |rank| rank - 1.0)
+    }
+
+    fn merge_fts_results(
+        literal_results: Vec<FtsResult>,
+        fts_results: Vec<FtsResult>,
+        limit: usize,
+    ) -> Vec<FtsResult> {
+        let mut seen = std::collections::HashSet::with_capacity(limit);
+        let mut merged = Vec::with_capacity(limit.min(literal_results.len() + fts_results.len()));
+        for result in literal_results.into_iter().chain(fts_results) {
+            if seen.insert(result.chunk_id.clone()) {
+                merged.push(result);
+                if merged.len() == limit {
+                    break;
+                }
+            }
+        }
+        merged
+    }
+
+    fn search_fts_substring(
+        &self,
+        query: &str,
+        limit: usize,
+        sources: Option<&[&str]>,
+        rank: f64,
+    ) -> Result<Vec<FtsResult>, rusqlite::Error> {
+        let valid_literal = |literal: &str| {
+            let char_count = literal.chars().take(1025).count();
+            char_count > 0
+                && char_count <= 1024
+                && literal.chars().any(char::is_alphanumeric)
+                && (char_count > 1
+                    || literal
+                        .chars()
+                        .any(|c| !c.is_ascii() && c.is_alphanumeric()))
+        };
+        let phrase = query.trim();
+        let has_phrase = valid_literal(phrase);
+        let mut literals = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        if has_phrase {
+            literals.push(phrase);
+            seen.insert(phrase.to_lowercase());
+        }
+        // Whitespace/list separators delimit keywords, not technical symbols such as C++.
+        for term in query.split(|c: char| c.is_whitespace() || "，。；、,;".contains(c)) {
+            let term = term.trim_matches(|c: char| "\"'()[]{}!?！？".contains(c));
+            if valid_literal(term)
+                && (Self::needs_literal_fallback(term) || term.chars().all(|c| c.is_ascii_digit()))
+                && seen.insert(term.to_lowercase())
+            {
+                literals.push(term);
+                if literals.len() >= 64 {
+                    break;
+                }
+            }
+        }
+        if literals.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let predicates: Vec<String> = (1..=literals.len())
+            .map(|i| format!("instr(lower(c.text), lower(?{i})) > 0"))
+            .collect();
+        let phrase_predicate = if has_phrase {
+            "instr(lower(c.text), lower(?1)) > 0"
+        } else {
+            "0"
+        };
+        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = literals
+            .into_iter()
+            .map(|literal| Box::new(literal.to_owned()) as Box<dyn rusqlite::types::ToSql>)
+            .collect();
+        params_vec.push(Box::new(limit as i64));
+        let limit_parameter = params_vec.len();
+        let mut source_filter = String::new();
+        if let Some(sources) = sources {
+            let mut placeholders = Vec::new();
+            for source in sources {
+                params_vec.push(Box::new(source.to_string()));
+                placeholders.push(format!("?{}", params_vec.len()));
+            }
+            source_filter = format!(" AND c.source IN ({})", placeholders.join(", "));
+        }
+        let sql = format!(
+            "SELECT c.rowid, ({phrase_predicate}) AS phrase_match FROM chunks c \
+             WHERE ({}){source_filter} \
+             ORDER BY phrase_match DESC, c.created_at DESC, c.path ASC, c.id ASC \
+             LIMIT ?{limit_parameter}",
+            predicates.join(" OR ")
+        );
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params_vec.iter().map(|param| param.as_ref()).collect();
+        let mut stmt = self.db.prepare(&sql)?;
         let rows = stmt
-            .query_map(params![fts_query, limit], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?))
+            .query_map(param_refs.as_slice(), |row| {
+                let phrase_match = row.get::<_, bool>(1)?;
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    if phrase_match { rank - 1.0 } else { rank },
+                ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
-
         self.resolve_fts_rowids(rows)
     }
+    // ZMY SELF-ADDED CODE END
 
     fn resolve_fts_rowids(&self, rows: Vec<(i64, f64)>) -> Result<Vec<FtsResult>, rusqlite::Error> {
         let mut results = Vec::with_capacity(rows.len());
@@ -580,6 +736,9 @@ impl MemoryIndex {
         if !self.vec_available {
             return Ok(vec![]);
         }
+        // ZMY SELF-ADDED CODE START
+        self.clear_invalidated_embeddings()?;
+        // ZMY SELF-ADDED CODE END
         let mut stmt = self.db.prepare(
             "SELECT c.id, c.text FROM chunks c \
              LEFT JOIN chunks_vec_rowids v ON v.id = c.id \
@@ -602,6 +761,9 @@ impl MemoryIndex {
         if !self.vec_available {
             return Ok(());
         }
+        // ZMY SELF-ADDED CODE START
+        self.clear_invalidated_embeddings()?;
+        // ZMY SELF-ADDED CODE END
         let embedding_bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
         self.db.execute(
             "INSERT OR REPLACE INTO chunks_vec(chunk_id, embedding) VALUES (?1, ?2)",
@@ -619,6 +781,9 @@ impl MemoryIndex {
         if !self.vec_available {
             return Ok(vec![]);
         }
+        // ZMY SELF-ADDED CODE START
+        self.clear_invalidated_embeddings()?;
+        // ZMY SELF-ADDED CODE END
         let span = tracing::info_span!(
             "memory.vector_search",
             candidate_count = tracing::field::Empty
@@ -703,12 +868,10 @@ impl MemoryIndex {
                 "INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES('delete', ?1, ?2)",
                 params![record.rowid, record.text],
             )?;
-            if self.vec_available {
-                let _ = tx.execute(
-                    "DELETE FROM chunks_vec WHERE chunk_id = ?1",
-                    params![chunk_id],
-                );
-            }
+            // ZMY SELF-ADDED CODE START
+            // Persist tombstones so failed vector deletes can be retried after recovery.
+            Self::invalidate_embedding(&tx, chunk_id, self.vec_available)?;
+            // ZMY SELF-ADDED CODE END
             tx.execute("DELETE FROM chunks WHERE id = ?1", params![chunk_id])?;
         }
         tx.commit()?;
@@ -720,6 +883,61 @@ impl MemoryIndex {
         );
         Ok(existing.len())
     }
+
+    // ZMY SELF-ADDED CODE START
+    fn invalidate_embedding(
+        transaction: &rusqlite::Transaction<'_>,
+        chunk_id: &str,
+        vec_available: bool,
+    ) -> Result<(), rusqlite::Error> {
+        transaction.execute(
+            "INSERT OR IGNORE INTO embedding_invalidations(chunk_id) VALUES (?1)",
+            params![chunk_id],
+        )?;
+        if vec_available
+            && transaction
+                .execute(
+                    "DELETE FROM chunks_vec WHERE chunk_id = ?1",
+                    params![chunk_id],
+                )
+                .is_ok()
+        {
+            transaction.execute(
+                "DELETE FROM embedding_invalidations WHERE chunk_id = ?1",
+                params![chunk_id],
+            )?;
+        }
+        Ok(())
+    }
+
+    fn purge_invalidated_embeddings(
+        transaction: &rusqlite::Transaction<'_>,
+    ) -> Result<(), rusqlite::Error> {
+        let mut stmt = transaction.prepare("SELECT chunk_id FROM embedding_invalidations")?;
+        let ids = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        for id in ids {
+            transaction.execute("DELETE FROM chunks_vec WHERE chunk_id = ?1", params![id])?;
+        }
+        transaction.execute("DELETE FROM embedding_invalidations", [])?;
+        Ok(())
+    }
+
+    fn clear_invalidated_embeddings(&self) -> Result<(), rusqlite::Error> {
+        let pending: bool = self.db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM embedding_invalidations)",
+            [],
+            |row| row.get(0),
+        )?;
+        if pending {
+            let transaction = self.db.unchecked_transaction()?;
+            Self::purge_invalidated_embeddings(&transaction)?;
+            transaction.commit()?;
+        }
+        Ok(())
+    }
+    // ZMY SELF-ADDED CODE END
 
     /// Get all existing chunks for a path, keyed by chunk ID.
     ///
@@ -1390,4 +1608,656 @@ mod tests {
             "release_claim must reset the claim so doctor reports no stale lock"
         );
     }
+    // ZMY SELF-ADDED CODE START
+    #[test]
+    fn fork_lexical_search_recalls_separate_chinese_keywords() {
+        let tmp = TempDir::new().unwrap();
+        let mut index = MemoryIndex::initialize_fts_only(
+            rusqlite::Connection::open_in_memory().unwrap(),
+            test_storage(&tmp),
+            MemoryIndexConfig::default(),
+            4,
+        )
+        .unwrap();
+        let separated = tmp.path().join("a-separated.md");
+        let phrase = tmp.path().join("z-phrase.md");
+        let global = tmp.path().join("global.md");
+        index
+            .reindex_content(
+                &separated,
+                "workspace",
+                "部署要求兼容旧系统，服务端口使用8080。",
+            )
+            .unwrap();
+        index
+            .reindex_content(&phrase, "workspace", "部署 端口")
+            .unwrap();
+        index
+            .reindex_content(&global, "global", "服务端口使用9090。")
+            .unwrap();
+        let separated_id = format!("{}:0", separated.display());
+        let phrase_id = format!("{}:0", phrase.display());
+        let global_id = format!("{}:0", global.display());
+
+        for query in ["部署 端口", "部署，端口", "C++ 端口"] {
+            let results = index.search_fts(query, 10).unwrap();
+            assert!(
+                results.iter().any(|r| r.chunk_id == separated_id),
+                "{query}"
+            );
+            assert!(
+                results.iter().any(|r| r.chunk_id == global_id),
+                "OR semantics: {query}"
+            );
+            let scoped = index
+                .search_fts_by_sources(query, 10, &["workspace"])
+                .unwrap();
+            assert!(scoped.iter().any(|r| r.chunk_id == separated_id));
+            assert!(scoped.iter().all(|r| r.chunk_id != global_id));
+        }
+        assert_eq!(
+            index.search_fts("部署 端口", 1).unwrap()[0].chunk_id,
+            phrase_id
+        );
+        assert_eq!(
+            index
+                .search_fts_by_sources("部署 端口", 1, &["workspace"])
+                .unwrap()[0]
+                .chunk_id,
+            phrase_id
+        );
+        let limited = index.search_fts("部署 端口 部署", 2).unwrap();
+        assert_eq!(limited.len(), 2);
+        assert_ne!(limited[0].chunk_id, limited[1].chunk_id);
+        let long_query = format!("{} 部署 端口", "context ".repeat(150));
+        assert!(
+            index
+                .search_fts(&long_query, 10)
+                .unwrap()
+                .iter()
+                .any(|r| r.chunk_id == separated_id)
+        );
+        assert!(
+            index
+                .search_fts_by_sources("部署 端口", 10, &[])
+                .unwrap()
+                .is_empty()
+        );
+        assert!(index.search_fts("部署 端口", 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn fork_vector_invalidation_survives_failed_initialization_and_recovery() {
+        init_sqlite_vec();
+        for action in ["edit", "truncate", "delete", "recreate"] {
+            for reopen in [false, true] {
+                let tmp = TempDir::new().unwrap();
+                let db_path = tmp.path().join("test.sqlite");
+                let open = |dimensions| {
+                    MemoryIndex::open_or_create(
+                        &db_path,
+                        test_storage(&tmp),
+                        MemoryIndexConfig::default(),
+                        dimensions,
+                    )
+                    .unwrap()
+                };
+                let path = tmp.path().join("edited.md");
+                let untouched = tmp.path().join("untouched.md");
+                let id = format!("{}:0", path.display());
+                let untouched_id = format!("{}:0", untouched.display());
+                let mut healthy = open(4);
+                healthy
+                    .reindex_content(&path, "workspace", "oldcachetext")
+                    .unwrap();
+                healthy
+                    .reindex_content(&untouched, "workspace", "stabletext")
+                    .unwrap();
+                healthy.upsert_embedding(&id, &[0.1; 4]).unwrap();
+                healthy.upsert_embedding(&untouched_id, &[0.2; 4]).unwrap();
+
+                let mut fallback = open(999999);
+                assert!(!fallback.vec_available());
+                match action {
+                    "edit" => {
+                        fallback
+                            .reindex_content(&path, "workspace", "newcachetext")
+                            .unwrap();
+                    }
+                    "truncate" => {
+                        fallback.reindex_content(&path, "workspace", "").unwrap();
+                    }
+                    "delete" | "recreate" => {
+                        fallback.delete_path(&path).unwrap();
+                    }
+                    _ => unreachable!(),
+                }
+                if action == "recreate" {
+                    fallback
+                        .reindex_content(&path, "workspace", "newcachetext")
+                        .unwrap();
+                }
+                let has_text = action == "edit" || action == "recreate";
+                assert_eq!(
+                    fallback.search_fts("newcachetext", 10).unwrap().len(),
+                    usize::from(has_text)
+                );
+                drop(fallback);
+
+                if reopen {
+                    drop(healthy);
+                    healthy = open(4);
+                }
+                // An already-open vector connection must also observe the invalidation.
+                let vectors = healthy.vector_search(&[0.1; 4], 10).unwrap();
+                assert!(
+                    vectors.iter().all(|(chunk_id, _)| chunk_id != &id),
+                    "{action}, reopen={reopen}"
+                );
+                assert!(
+                    vectors
+                        .iter()
+                        .any(|(chunk_id, _)| chunk_id == &untouched_id)
+                );
+                let pending = healthy.chunks_without_embeddings().unwrap();
+                assert_eq!(pending.len(), usize::from(has_text));
+                if has_text {
+                    assert_eq!(pending[0], (id.clone(), "newcachetext".to_owned()));
+                    healthy.upsert_embedding(&id, &[0.8; 4]).unwrap();
+                    assert!(healthy.chunks_without_embeddings().unwrap().is_empty());
+                    assert_eq!(healthy.vector_search(&[0.8; 4], 1).unwrap()[0], (id, 0.0));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fork_failed_vector_migration_keeps_fts_and_old_cache() {
+        init_sqlite_vec();
+        let tmp = TempDir::new().unwrap();
+        let db_path = tmp.path().join("test.sqlite");
+        let storage = test_storage(&tmp);
+        let file = tmp.path().join("note.md");
+        std::fs::write(&file, "# Durable\n\nlexical migration rollback token").unwrap();
+        let mut index =
+            MemoryIndex::open_or_create(&db_path, storage.clone(), MemoryIndexConfig::default(), 4)
+                .unwrap();
+        index.reindex_file(&file, "workspace").unwrap();
+        let (chunk_id, _) = index
+            .chunks_without_embeddings()
+            .unwrap()
+            .into_iter()
+            .next()
+            .expect("sqlite-vec should expose the new chunk");
+        index
+            .upsert_embedding(&chunk_id, &[0.1, 0.2, 0.3, 0.4])
+            .unwrap();
+        index
+            .db()
+            .execute_batch(
+                "CREATE TRIGGER fail_embedding_dimensions BEFORE INSERT ON meta
+                 WHEN NEW.key = 'embedding_dimensions'
+                 BEGIN SELECT RAISE(ABORT, 'test migration failure'); END;",
+            )
+            .unwrap();
+        let failed =
+            MemoryIndex::open_or_create(&db_path, storage.clone(), MemoryIndexConfig::default(), 8)
+                .unwrap();
+        assert!(!failed.vec_available());
+        assert!(!failed.search_fts("rollback token", 10).unwrap().is_empty());
+        let stored: String = failed
+            .db()
+            .query_row(
+                schema::GET_META_SQL,
+                params!["embedding_dimensions"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, "4");
+        let cached: i64 = failed
+            .db()
+            .query_row("SELECT COUNT(*) FROM chunks_vec", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(cached, 1);
+        drop(failed);
+        let reopened = MemoryIndex::open_or_create_preserving_dimensions(
+            &db_path,
+            storage,
+            MemoryIndexConfig::default(),
+            1024,
+        )
+        .unwrap();
+        assert_eq!(reopened.embedding_dimensions(), 4);
+        assert!(
+            !reopened
+                .search_fts("rollback token", 10)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn fork_invalid_dimensions_and_metadata_keep_fts_operational() {
+        init_sqlite_vec();
+        {
+            let tmp = TempDir::new().unwrap();
+            let db_path = tmp.path().join("zero-dimension.sqlite");
+            let storage = test_storage(&tmp);
+            let file = tmp.path().join("note.md");
+            std::fs::write(&file, "# FTS fallback\n\nzero dimension lexical token").unwrap();
+            let mut index =
+                MemoryIndex::open_or_create(&db_path, storage, MemoryIndexConfig::default(), 0)
+                    .unwrap();
+            index.reindex_file(&file, "workspace").unwrap();
+            assert!(!index.search_fts("lexical token", 10).unwrap().is_empty());
+        }
+        for (case, metadata) in [
+            ("invalid", Some("not-a-dimension")),
+            ("nonpositive", Some("0")),
+            ("missing", None),
+        ] {
+            let tmp = TempDir::new().unwrap();
+            let db_path = tmp.path().join(format!("{case}.sqlite"));
+            let storage = test_storage(&tmp);
+            let file = tmp.path().join("note.md");
+            std::fs::write(&file, "# FTS fallback\n\ninvalid metadata lexical token").unwrap();
+            let mut index = MemoryIndex::open_or_create(
+                &db_path,
+                storage.clone(),
+                MemoryIndexConfig::default(),
+                4,
+            )
+            .unwrap();
+            assert!(index.vec_available());
+            index.reindex_file(&file, "workspace").unwrap();
+            let (chunk_id, _) = index
+                .chunks_without_embeddings()
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap();
+            index
+                .upsert_embedding(&chunk_id, &[0.1, 0.2, 0.3, 0.4])
+                .unwrap();
+            drop(index);
+
+            let connection = rusqlite::Connection::open(&db_path).unwrap();
+            if let Some(metadata) = metadata {
+                connection
+                    .execute(
+                        schema::UPSERT_META_SQL,
+                        params!["embedding_dimensions", metadata],
+                    )
+                    .unwrap();
+            } else {
+                connection
+                    .execute("DELETE FROM meta WHERE key = 'embedding_dimensions'", [])
+                    .unwrap();
+            }
+            drop(connection);
+
+            let mut reopened = MemoryIndex::open_or_create_preserving_dimensions(
+                &db_path,
+                storage,
+                MemoryIndexConfig::default(),
+                8,
+            )
+            .unwrap();
+            assert_eq!(reopened.embedding_dimensions(), 8);
+            assert!(!reopened.vec_available());
+            assert!(!reopened.search_fts("lexical token", 10).unwrap().is_empty());
+            let vector_schema: String = reopened
+                .db()
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'chunks_vec'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(vector_schema.contains("FLOAT[4]"));
+            let cached: i64 = reopened
+                .db()
+                .query_row("SELECT COUNT(*) FROM chunks_vec", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(cached, 1);
+            let stored_metadata: Option<String> = reopened
+                .db()
+                .query_row(
+                    schema::GET_META_SQL,
+                    params!["embedding_dimensions"],
+                    |row| row.get(0),
+                )
+                .optional()
+                .unwrap();
+            assert_eq!(stored_metadata.as_deref(), metadata);
+
+            let new_file = tmp.path().join("new-note.md");
+            std::fs::write(&new_file, "# New\n\npreserved lexical write token").unwrap();
+            reopened.reindex_file(&new_file, "workspace").unwrap();
+            assert!(
+                !reopened
+                    .search_fts("lexical write token", 10)
+                    .unwrap()
+                    .is_empty()
+            );
+            let cached_after_write: i64 = reopened
+                .db()
+                .query_row("SELECT COUNT(*) FROM chunks_vec", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(cached_after_write, 1);
+            let metadata_after_write: Option<String> = reopened
+                .db()
+                .query_row(
+                    schema::GET_META_SQL,
+                    params!["embedding_dimensions"],
+                    |row| row.get(0),
+                )
+                .optional()
+                .unwrap();
+            assert_eq!(metadata_after_write.as_deref(), metadata);
+        }
+    }
+
+    #[test]
+    fn fork_missing_dimension_metadata_rebuilds_vectors_after_fts_edits() {
+        init_sqlite_vec();
+        for requested_dimensions in [4, 8] {
+            let tmp = TempDir::new().unwrap();
+            let db_path = tmp.path().join("missing-dimensions.sqlite");
+            let storage = test_storage(&tmp);
+            let edited_file = tmp.path().join("edited.md");
+            let deleted_file = tmp.path().join("deleted.md");
+            std::fs::write(&edited_file, "# Edited\n\noldcachedtoken").unwrap();
+            std::fs::write(&deleted_file, "# Deleted\n\ndeletedcachedtoken").unwrap();
+
+            let mut seeded = MemoryIndex::open_or_create(
+                &db_path,
+                storage.clone(),
+                MemoryIndexConfig::default(),
+                4,
+            )
+            .unwrap();
+            assert!(seeded.vec_available());
+            seeded.reindex_file(&edited_file, "workspace").unwrap();
+            seeded.reindex_file(&deleted_file, "workspace").unwrap();
+            let initial_chunks = seeded.chunks_without_embeddings().unwrap();
+            assert_eq!(initial_chunks.len(), 2);
+            let edited_id = format!("{}:0", edited_file.to_string_lossy());
+            let deleted_id = format!("{}:0", deleted_file.to_string_lossy());
+            for (chunk_id, _) in initial_chunks {
+                seeded
+                    .upsert_embedding(&chunk_id, &[0.25, 0.25, 0.25, 0.25])
+                    .unwrap();
+            }
+            drop(seeded);
+
+            let connection = rusqlite::Connection::open(&db_path).unwrap();
+            connection
+                .execute("DELETE FROM meta WHERE key = 'embedding_dimensions'", [])
+                .unwrap();
+            drop(connection);
+
+            let mut offline = MemoryIndex::open_or_create_preserving_dimensions(
+                &db_path,
+                storage.clone(),
+                MemoryIndexConfig::default(),
+                1024,
+            )
+            .unwrap();
+            assert!(!offline.vec_available());
+            std::fs::write(&edited_file, "# Edited\n\nreplacementcachedtoken").unwrap();
+            let edit_result = offline.reindex_file(&edited_file, "workspace").unwrap();
+            assert_eq!(edit_result.updated, 1);
+            assert_eq!(edit_result.added, 0);
+            assert!(
+                !offline
+                    .search_fts("replacementcachedtoken", 10)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(offline.search_fts("oldcachedtoken", 10).unwrap().is_empty());
+            assert_eq!(offline.delete_path(&deleted_file).unwrap(), 1);
+            assert!(
+                offline
+                    .search_fts("deletedcachedtoken", 10)
+                    .unwrap()
+                    .is_empty()
+            );
+
+            let mut statement = offline
+                .db()
+                .prepare("SELECT chunk_id FROM chunks_vec ORDER BY chunk_id")
+                .unwrap();
+            let cached_ids = statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            let mut expected_cached_ids = vec![edited_id.clone(), deleted_id.clone()];
+            expected_cached_ids.sort_unstable();
+            assert_eq!(cached_ids, expected_cached_ids);
+            let stored_dimensions: Option<String> = offline
+                .db()
+                .query_row(
+                    schema::GET_META_SQL,
+                    params!["embedding_dimensions"],
+                    |row| row.get(0),
+                )
+                .optional()
+                .unwrap();
+            assert_eq!(stored_dimensions, None);
+            drop(statement);
+            drop(offline);
+
+            let recovered = MemoryIndex::open_or_create(
+                &db_path,
+                storage,
+                MemoryIndexConfig::default(),
+                requested_dimensions,
+            )
+            .unwrap();
+            assert!(recovered.vec_available());
+            assert_eq!(recovered.embedding_dimensions(), requested_dimensions);
+            let missing = recovered.chunks_without_embeddings().unwrap();
+            assert_eq!(missing.len(), 1);
+            assert_eq!(missing[0].0, edited_id);
+            assert!(missing[0].1.contains("replacementcachedtoken"));
+            assert!(
+                !recovered
+                    .search_fts("replacementcachedtoken", 10)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(
+                recovered
+                    .search_fts("oldcachedtoken", 10)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(
+                recovered
+                    .search_fts("deletedcachedtoken", 10)
+                    .unwrap()
+                    .is_empty()
+            );
+            let vector_schema: String = recovered
+                .db()
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'chunks_vec'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(vector_schema.contains(&format!("FLOAT[{requested_dimensions}]")));
+            let cached_after_recovery: i64 = recovered
+                .db()
+                .query_row("SELECT COUNT(*) FROM chunks_vec", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(cached_after_recovery, 0);
+            let stored_dimensions: String = recovered
+                .db()
+                .query_row(
+                    schema::GET_META_SQL,
+                    params!["embedding_dimensions"],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(stored_dimensions, requested_dimensions.to_string());
+
+            recovered
+                .upsert_embedding(&edited_id, &vec![0.5; requested_dimensions])
+                .unwrap();
+            assert!(recovered.chunks_without_embeddings().unwrap().is_empty());
+        }
+    }
+    // ZMY SELF-ADDED CODE END
+
+    // ZMY SELF-ADDED CODE START
+    #[test]
+    fn fork_lexical_search_recalls_literal_chinese_technical_and_operator_queries() {
+        init_sqlite_vec();
+        let tmp = TempDir::new().unwrap();
+        let mut index = test_index(&tmp);
+        let workspace = tmp.path().join("workspace.md");
+        let global = tmp.path().join("global.md");
+        let technical = tmp.path().join("technical.md");
+        let plain_c = tmp.path().join("plain-c.md");
+        let literal = tmp.path().join("literal.md");
+        let graphite = tmp.path().join("graphite.md");
+        std::fs::write(&workspace, "# 部署\n\n部署").unwrap();
+        std::fs::write(&global, "# Chinese requirement\n\n部署要求兼容旧系统。").unwrap();
+        std::fs::write(
+            &technical,
+            "# Listener\n\nThe listener uses port 8080 and a C++ service.",
+        )
+        .unwrap();
+        std::fs::write(&plain_c, "# C service\n\nA plain C service.").unwrap();
+        std::fs::write(
+            &literal,
+            "# Literal query\n\nThe exact input is \"the OR a++\"; payload %' OR 1=1 --.",
+        )
+        .unwrap();
+        std::fs::write(
+            &graphite,
+            "# Graphite deployment\n\nGraphite deployment notes for workspace memory.",
+        )
+        .unwrap();
+        index.reindex_file(&workspace, "workspace").unwrap();
+        index.reindex_file(&global, "global").unwrap();
+        index.reindex_file(&technical, "workspace").unwrap();
+        index.reindex_file(&plain_c, "workspace").unwrap();
+        index.reindex_file(&literal, "workspace").unwrap();
+        index.reindex_file(&graphite, "workspace").unwrap();
+
+        let chinese = index.search_fts("部署", 10).unwrap();
+        assert_eq!(chinese.len(), 2);
+        assert!(chinese.iter().any(|result| {
+            result
+                .chunk_id
+                .starts_with(workspace.to_string_lossy().as_ref())
+        }));
+        let workspace_results = index
+            .search_fts_by_sources("部署", 10, &["workspace"])
+            .unwrap();
+        assert_eq!(workspace_results.len(), 1);
+        assert_eq!(
+            workspace_results[0].chunk_id,
+            format!("{}:0", workspace.to_string_lossy())
+        );
+        let global_results = index
+            .search_fts_by_sources("部署", 10, &["global"])
+            .unwrap();
+        assert_eq!(global_results.len(), 1);
+        assert!(global_results.iter().all(|result| {
+            result
+                .chunk_id
+                .starts_with(global.to_string_lossy().as_ref())
+        }));
+        let chinese_single = index.search_fts("署", 10).unwrap();
+        assert!(
+            chinese_single
+                .iter()
+                .any(|result| result.chunk_id == format!("{}:0", global.to_string_lossy()))
+        );
+
+        let port = index.search_fts("8080", 10).unwrap();
+        assert!(
+            port.iter()
+                .any(|result| result.chunk_id == format!("{}:0", technical.to_string_lossy()))
+        );
+        let cpp = index.search_fts("C++", 10).unwrap();
+        assert!(
+            cpp.iter()
+                .any(|result| result.chunk_id == format!("{}:0", technical.to_string_lossy()))
+        );
+        assert_eq!(
+            index.search_fts("C++", 1).unwrap()[0].chunk_id,
+            format!("{}:0", technical.to_string_lossy())
+        );
+
+        let operator = index.search_fts("\"the OR a++\"", 10).unwrap();
+        assert_eq!(operator.len(), 1);
+        assert_eq!(
+            operator[0].chunk_id,
+            format!("{}:0", literal.to_string_lossy())
+        );
+        let english = index.search_fts("listener port service", 10).unwrap();
+        assert!(
+            english
+                .iter()
+                .any(|result| result.chunk_id == format!("{}:0", technical.to_string_lossy()))
+        );
+        let graphite_id = format!("{}:0", graphite.to_string_lossy());
+        let long_prompt = format!(
+            "graphite deployment {}",
+            "conversational context ".repeat(60)
+        );
+        assert!(long_prompt.chars().count() > 1200);
+        assert!(
+            index
+                .search_fts(&long_prompt, 10)
+                .unwrap()
+                .iter()
+                .any(|result| result.chunk_id == graphite_id)
+        );
+        assert!(
+            index
+                .search_fts_by_sources(&long_prompt, 10, &["workspace"])
+                .unwrap()
+                .iter()
+                .any(|result| result.chunk_id == graphite_id)
+        );
+        let overlong_token_prompt = format!("{} graphite deployment", "x".repeat(1025));
+        assert!(
+            index
+                .search_fts(&overlong_token_prompt, 10)
+                .unwrap()
+                .iter()
+                .any(|result| result.chunk_id == graphite_id)
+        );
+        assert!(
+            index
+                .search_fts_by_sources(&overlong_token_prompt, 10, &["workspace"])
+                .unwrap()
+                .iter()
+                .any(|result| result.chunk_id == graphite_id)
+        );
+        assert!(index.search_fts("   ", 10).unwrap().is_empty());
+        assert!(index.search_fts("++---", 10).unwrap().is_empty());
+        assert!(index.search_fts("部署要求兼容旧", 0).unwrap().is_empty());
+        assert!(
+            index
+                .search_fts("界".repeat(1025).as_str(), 10)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            index
+                .search_fts_by_sources("部署要求兼容旧", 10, &[])
+                .unwrap()
+                .is_empty()
+        );
+        assert!(chinese.iter().all(|result| result.rank < 0.0));
+    }
+    // ZMY SELF-ADDED CODE END
 }

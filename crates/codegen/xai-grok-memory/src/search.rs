@@ -20,6 +20,11 @@ use super::index::MemoryIndex;
 use super::observation::MemoryRetrievalMode;
 use xai_grok_config_types::MemorySearchConfig;
 
+// ZMY SELF-ADDED CODE START
+pub(super) const INTERACTIVE_EMBEDDING_BUDGET: std::time::Duration =
+    std::time::Duration::from_secs(2);
+// ZMY SELF-ADDED CODE END
+
 pub(super) enum QueryEmbedding {
     FtsOnly,
     Hybrid(Vec<f32>),
@@ -43,25 +48,49 @@ impl QueryEmbedding {
     }
 }
 
+// ZMY SELF-ADDED CODE START
 pub(super) async fn resolve_query_embedding(
     provider: Option<&dyn EmbeddingProvider>,
     is_vector_index_available: bool,
     query: &str,
 ) -> QueryEmbedding {
+    resolve_query_embedding_until(
+        provider,
+        is_vector_index_available,
+        query,
+        tokio::time::Instant::now() + INTERACTIVE_EMBEDDING_BUDGET,
+    )
+    .await
+}
+// ZMY SELF-ADDED CODE END
+
+// ZMY SELF-ADDED CODE START
+pub(super) async fn resolve_query_embedding_until(
+    provider: Option<&dyn EmbeddingProvider>,
+    is_vector_index_available: bool,
+    query: &str,
+    deadline: tokio::time::Instant,
+) -> QueryEmbedding {
     let Some(provider) = provider.filter(|_| is_vector_index_available) else {
         return QueryEmbedding::FtsOnly;
     };
-    match provider.embed_batch(&[query]).await {
-        Ok(embeddings) => embeddings
+    match tokio::time::timeout_at(deadline, provider.embed_batch(&[query])).await {
+        Ok(Ok(embeddings)) => embeddings
             .into_iter()
             .next()
+            .filter(|embedding| embedding.len() == provider.dimensions())
             .map_or(QueryEmbedding::EmbeddingFallback, QueryEmbedding::Hybrid),
-        Err(error) => {
+        Ok(Err(error)) => {
             tracing::warn!(target: crate::MEMORY_LOG_TARGET, %error, "embedding query failed");
+            QueryEmbedding::EmbeddingFallback
+        }
+        Err(_) => {
+            tracing::warn!(target: crate::MEMORY_LOG_TARGET, "embedding query exceeded the interactive budget");
             QueryEmbedding::EmbeddingFallback
         }
     }
 }
+// ZMY SELF-ADDED CODE END
 
 /// A search result with merged scoring from FTS and vector search.
 #[derive(Debug, Clone)]

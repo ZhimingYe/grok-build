@@ -142,6 +142,9 @@ pub async fn embed_missing_chunks(
                     batch_size = texts.len(),
                     "embedding batch failed, skipping"
                 );
+                // ZMY SELF-ADDED CODE START
+                break;
+                // ZMY SELF-ADDED CODE END
             }
         }
     }
@@ -156,3 +159,61 @@ pub async fn embed_missing_chunks(
     }
     embedded
 }
+
+// ZMY SELF-ADDED CODE START
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    struct FailingProvider {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl embedding::EmbeddingProvider for FailingProvider {
+        async fn embed_batch(
+            &self,
+            _texts: &[&str],
+        ) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err("test embedding failure".into())
+        }
+
+        fn model_name(&self) -> &str {
+            "failing"
+        }
+
+        fn dimensions(&self) -> usize {
+            4
+        }
+    }
+
+    #[tokio::test]
+    async fn fork_embed_missing_chunks_stops_after_first_failed_batch() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        init_sqlite_vec();
+        let storage = MemoryStorage::with_paths(
+            tmp.path().join("memory"),
+            tmp.path().join("memory/workspace"),
+        );
+        let db_path = tmp.path().join("index.sqlite");
+        let mut index =
+            MemoryIndex::open_or_create(&db_path, storage, Default::default(), 4).unwrap();
+        for i in 0..40 {
+            let file = tmp.path().join(format!("note-{i}.md"));
+            std::fs::write(&file, format!("# Note {i}\n\nbatch failure token {i}")).unwrap();
+            index.reindex_file(&file, "workspace").unwrap();
+        }
+        let calls = Arc::new(AtomicUsize::new(0));
+        let provider = FailingProvider {
+            calls: calls.clone(),
+        };
+        assert_eq!(embed_missing_chunks(&index, &provider).await, 0);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+}
+// ZMY SELF-ADDED CODE END

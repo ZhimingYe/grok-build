@@ -4524,6 +4524,7 @@ fn with_resolved_model<T>(model_id: &str, f: impl FnOnce(ModelLookup) -> T) -> T
 /// Resolve a standalone `SamplerConfig` for an auxiliary model slug (image description, session summary, ...).
 /// Resolved through the catalog so a `[model.*]` override redirects it to its own endpoint, credentials, and routing `model`.
 /// On `None` the caller falls back to the active session's model.
+// ZMY SELF-ADDED CODE START
 pub(crate) fn resolve_aux_model_sampling_config(
     model_id: &str,
     models: &IndexMap<String, ModelEntry>,
@@ -4544,6 +4545,9 @@ pub(crate) fn resolve_aux_model_sampling_config(
             None,
             None,
         );
+        if xai_grok_env::is_official_service_url(&sampler.base_url) {
+            return None;
+        }
         if sampler.api_key.is_some() {
             return Some(sampler);
         }
@@ -4554,6 +4558,18 @@ pub(crate) fn resolve_aux_model_sampling_config(
             );
             return None;
         }
+        if let Some(env_keys) = entry.env_key.as_ref().filter(|keys| !keys.is_empty()) {
+            tracing::warn!(
+                model = %model_id,
+                env_key = %env_keys,
+                "aux model requires an unset env_key; the caller falls back to its session default"
+            );
+            return None;
+        }
+        return Some(sampler);
+    }
+    if xai_grok_env::is_official_service_url(&endpoints.resolve_inference_base_url()) {
+        return None;
     }
     let xai_bearer = session_key
         .map(|s| s.to_owned())
@@ -4629,6 +4645,7 @@ pub(crate) fn resolve_aux_model_sampling_config(
     );
     None
 }
+// ZMY SELF-ADDED CODE END
 /// Stamp the session-local identity, attribution, bearer resolver, and retries from the active session onto a routed aux `SamplerConfig`. A helper model then keeps the session's auth/attribution.
 /// Shared by image-describe and the auto-mode classifier so the two can't drift. The resolver gate is host-based, stricter than `session_token_auth_gate`.
 /// A session-token deployment on a custom `models_base_url` loses aux-sampler refresh, rather than risk the session bearer on a third-party endpoint.
@@ -4857,6 +4874,7 @@ fn resolve_hidden_default_web_search_sampling_config(
         None,
     )
 }
+// ZMY SELF-ADDED CODE START
 pub(crate) fn resolve_web_search_sampling_config(
     model_id: &str,
     models: &IndexMap<String, ModelEntry>,
@@ -4901,8 +4919,10 @@ pub(crate) fn resolve_web_search_sampling_config(
             "configured web_search model not found; disabling web search"
         );
     }
+    let resolved = resolved.filter(|cfg| !xai_grok_env::is_official_service_url(&cfg.base_url));
     resolved.map(crate::tools::config::web_search_sampling_config)
 }
+// ZMY SELF-ADDED CODE END
 pub(crate) fn to_acp_model_info(
     models: &IndexMap<String, ModelEntry>,
 ) -> IndexMap<acp::ModelId, acp::ModelInfo> {

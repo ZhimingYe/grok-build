@@ -17,7 +17,9 @@ fn credentials(static_bearer: Option<&str>) -> MediaToolCredentials {
 
 #[test]
 fn the_static_bearer_is_the_configured_key_and_nothing_else() {
-    let cfg = config("[endpoints]\nxai_api_base_url = \"https://api.x.ai/v1\"\n");
+    // ZMY SELF-ADDED CODE START
+    let cfg = config("[endpoints]\nxai_api_base_url = \"https://provider.example/v1\"\n");
+    // ZMY SELF-ADDED CODE END
 
     let ImageGenConfig::Enabled {
         api_key, base_url, ..
@@ -26,7 +28,9 @@ fn the_static_bearer_is_the_configured_key_and_nothing_else() {
         panic!("image tools are enabled by default");
     };
     assert_eq!(None, api_key);
-    assert_eq!("https://api.x.ai/v1", base_url);
+    // ZMY SELF-ADDED CODE START
+    assert_eq!("https://provider.example/v1", base_url);
+    // ZMY SELF-ADDED CODE END
 
     let ImageGenConfig::Enabled { api_key, .. } =
         image_gen_config(&cfg, &credentials(Some("xai-key")))
@@ -40,7 +44,11 @@ fn the_static_bearer_is_the_configured_key_and_nothing_else() {
 /// video download locally.
 #[test]
 fn a_zdr_config_without_a_bucket_restricts_video_on_every_host() {
-    let cfg = config("[tools]\ndisable_zdr_incompatible_tools = true\n");
+    // ZMY SELF-ADDED CODE START
+    let cfg = config(
+        "[endpoints]\nxai_api_base_url = \"https://provider.example/v1\"\n[tools]\ndisable_zdr_incompatible_tools = true\n",
+    );
+    // ZMY SELF-ADDED CODE END
 
     let VideoGenConfig::Enabled {
         zdr_restricted,
@@ -56,7 +64,9 @@ fn a_zdr_config_without_a_bucket_restricts_video_on_every_host() {
 
 #[test]
 fn media_headers_identify_build_traffic() {
-    let cfg = config("");
+    // ZMY SELF-ADDED CODE START
+    let cfg = config("[endpoints]\nxai_api_base_url = \"https://provider.example/v1\"\n");
+    // ZMY SELF-ADDED CODE END
     let ImageGenConfig::Enabled { extra_headers, .. } = image_gen_config(&cfg, &credentials(None))
     else {
         panic!("image tools are enabled by default");
@@ -70,3 +80,18 @@ fn media_headers_identify_build_traffic() {
         "{extra_headers:?}"
     );
 }
+
+// ZMY SELF-ADDED CODE START
+#[test]
+fn fork_official_media_defaults_are_disabled() {
+    let cfg = config("");
+    assert!(matches!(
+        image_gen_config(&cfg, &credentials(None)),
+        ImageGenConfig::Disabled
+    ));
+    assert!(matches!(
+        video_gen_config(&cfg, &credentials(None)),
+        VideoGenConfig::Disabled
+    ));
+}
+// ZMY SELF-ADDED CODE END

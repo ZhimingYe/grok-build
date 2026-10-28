@@ -157,6 +157,10 @@ pub enum ManagedMcpFetchError {
     Transport(#[from] reqwest::Error),
     #[error("no auth token available")]
     NoAuth,
+    // ZMY SELF-ADDED CODE START
+    #[error("{}", xai_grok_env::OFFICIAL_SERVICES_DISABLED)]
+    OfficialServicesDisabled,
+    // ZMY SELF-ADDED CODE END
 }
 
 async fn get_authenticated_json<T: serde::de::DeserializeOwned>(
@@ -166,6 +170,11 @@ async fn get_authenticated_json<T: serde::de::DeserializeOwned>(
     fetch_failed_message: &'static str,
     parse_error_message: &'static str,
 ) -> Result<T, ManagedMcpFetchError> {
+    // ZMY SELF-ADDED CODE START
+    if xai_grok_env::is_official_service_url(url) {
+        return Err(ManagedMcpFetchError::OfficialServicesDisabled);
+    }
+    // ZMY SELF-ADDED CODE END
     let resp = match xai_grok_http::shared_client()
         .get(url)
         .timeout(std::time::Duration::from_secs(10))
@@ -208,6 +217,11 @@ pub async fn call_gateway_tool(
     call_id: &str,
     arguments: serde_json::Value,
 ) -> Result<GatewayToolCallResponse, ManagedMcpFetchError> {
+    // ZMY SELF-ADDED CODE START
+    if xai_grok_env::is_official_service_url(proxy_base_url) {
+        return Err(ManagedMcpFetchError::OfficialServicesDisabled);
+    }
+    // ZMY SELF-ADDED CODE END
     let url = format!("{proxy_base_url}/mcp/tools/call");
     let arguments = if arguments.is_null() {
         serde_json::json!({})
@@ -468,6 +482,28 @@ mod tests {
             Some("Slack")
         );
     }
+
+    // ZMY SELF-ADDED CODE START
+    #[tokio::test]
+    async fn official_gateway_endpoints_fail_before_transport() {
+        let catalog = fetch_gateway_tool_catalog("https://api.x.ai/v1", "token").await;
+        assert!(matches!(
+            catalog,
+            Err(ManagedMcpFetchError::OfficialServicesDisabled)
+        ));
+        let call = call_gateway_tool(
+            "https://api.x.ai/v1",
+            "token",
+            "tool-call",
+            serde_json::json!({}),
+        )
+        .await;
+        assert!(matches!(
+            call,
+            Err(ManagedMcpFetchError::OfficialServicesDisabled)
+        ));
+    }
+    // ZMY SELF-ADDED CODE END
 
     #[tokio::test]
     async fn gateway_tool_call_error_preserves_proxy_message() {

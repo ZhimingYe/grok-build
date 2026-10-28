@@ -407,18 +407,19 @@ impl SessionMemory {
         if !self.uses_legacy_pipeline() {
             return None;
         }
-        let embed_dims = self
-            .backend_params
-            .as_ref()
-            .and_then(|p| p.embed_config.as_ref())
-            .map_or(1024, |c| c.dimensions);
+        // ZMY SELF-ADDED CODE START
+        // The previous configured dimension is intentionally not used for lexical maintenance.
+        // ZMY SELF-ADDED CODE END
         let db_path = storage.workspace_dir().join("index.sqlite");
-        crate::session::memory::MemoryIndex::open_or_create(
+        // ZMY SELF-ADDED CODE START
+        // Lexical maintenance preserves any dimensions recorded by the embedding backend.
+        crate::session::memory::MemoryIndex::open_or_create_preserving_dimensions(
             &db_path,
             storage.clone(),
             Default::default(),
-            embed_dims,
+            1024,
         )
+        // ZMY SELF-ADDED CODE END
         .ok()
     }
 
@@ -435,14 +436,36 @@ impl SessionMemory {
         let Some(storage) = self.storage.borrow().clone() else {
             return;
         };
-        if let Some(mut index) = self.open_index(&storage) {
+        // ZMY SELF-ADDED CODE START
+        // Replace the lexical-only open so configured vector writes use the provider's dimensions.
+        if !self.uses_legacy_pipeline() {
+            return;
+        }
+        let provider = if let Some(params) = self.backend_params.as_ref() {
+            params.make_embedding_provider().await
+        } else {
+            None
+        };
+        let open_index = if let Some(provider) = provider.as_ref() {
+            crate::session::memory::MemoryIndex::open_or_create(
+                &storage.workspace_dir().join("index.sqlite"),
+                storage.clone(),
+                Default::default(),
+                xai_grok_memory::embedding::EmbeddingProvider::dimensions(provider),
+            )
+            .ok()
+        } else {
+            self.open_index(&storage)
+        };
+        if let Some(mut index) = open_index {
             let _ = index.reindex_file(path, source);
-            if let Some(ref params) = self.backend_params
-                && let Some(provider) = params.make_embedding_provider().await
+            if index.vec_available()
+                && let Some(provider) = provider.as_ref()
             {
-                crate::session::memory::embed_missing_chunks(&index, &provider).await;
+                crate::session::memory::embed_missing_chunks(&index, provider).await;
             }
         }
+        // ZMY SELF-ADDED CODE END
     }
 
     /// Remove chunks for the given file paths from the search index.

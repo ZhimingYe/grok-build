@@ -56,11 +56,12 @@ pub(crate) fn resolve_suggest_reasoning(
     }
 }
 
+// ZMY SELF-ADDED CODE START
 pub(crate) fn effective_suggest_model(
     pin: &PromptSuggestModelPin,
     client_hint: Option<&str>,
     session_model: Option<&str>,
-    reasoning_is_off: bool,
+    _reasoning_is_off: bool,
     in_catalog: impl Fn(&str) -> bool,
 ) -> Option<String> {
     let client_hint = client_hint.map(str::trim).filter(|s| !s.is_empty());
@@ -71,20 +72,13 @@ pub(crate) fn effective_suggest_model(
         }
         PromptSuggestModelPin::Unpinned => match client_hint {
             Some(model) => in_catalog(model).then(|| model.to_owned()),
-            None if reasoning_is_off => {
-                let alias = crate::util::config::NON_REASONING_PROMPT_SUGGEST_MODEL;
-                in_catalog(alias).then(|| alias.to_owned()).or_else(|| {
-                    session_model
-                        .filter(|model| in_catalog(model))
-                        .map(str::to_owned)
-                })
-            }
             None => session_model
                 .filter(|model| in_catalog(model))
                 .map(str::to_owned),
         },
     }
 }
+// ZMY SELF-ADDED CODE END
 
 /// Total character budget for the compact transcript (~6k tokens at the bytes/4 estimate).
 /// It keeps the per-turn cost of the feature trivial even on long sessions.
@@ -260,15 +254,19 @@ mod tests {
         );
     }
 
+    // ZMY SELF-ADDED CODE START
     #[test]
-    fn effective_model_default_prefers_catalogued_non_reasoning_alias() {
+    fn effective_model_default_prefers_catalogued_session_model_even_when_reasoning_off() {
         let alias = crate::util::config::NON_REASONING_PROMPT_SUGGEST_MODEL;
         assert_eq!(
-            effective_suggest_model(&Pin::Unpinned, None, Some("session"), true, |m| m == alias)
-                .as_deref(),
-            Some(alias)
+            effective_suggest_model(&Pin::Unpinned, None, Some("session"), true, |m| {
+                m == alias || m == "session"
+            })
+            .as_deref(),
+            Some("session")
         );
     }
+    // ZMY SELF-ADDED CODE END
 
     #[test]
     fn effective_model_default_falls_back_to_catalogued_session_model() {
@@ -284,17 +282,18 @@ mod tests {
         );
     }
 
+    // ZMY SELF-ADDED CODE START
     #[test]
-    fn effective_model_default_uses_alias_without_session_catalog_entry() {
+    fn effective_model_default_does_not_use_alias_without_session_catalog_entry() {
         let alias = crate::util::config::NON_REASONING_PROMPT_SUGGEST_MODEL;
         assert_eq!(
             effective_suggest_model(&Pin::Unpinned, None, Some("missing-session"), true, |m| {
                 m == alias
-            })
-            .as_deref(),
-            Some(alias)
+            }),
+            None
         );
     }
+    // ZMY SELF-ADDED CODE END
 
     #[test]
     fn configured_reasoning_reserves_budget() {
