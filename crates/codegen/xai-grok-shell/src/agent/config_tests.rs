@@ -588,6 +588,56 @@ fn fork_aux_resolution_blocks_official_defaults_and_keeps_custom_no_key_catalog(
     }
 }
 // ZMY SELF-ADDED CODE END
+// ZMY SELF-ADDED CODE START
+#[test]
+#[serial]
+fn fork_aux_unresolved_env_key_falls_back_to_active_session_config() {
+    use crate::agent::auth_method::{LEGACY_XAI_API_KEY_ENV_VAR, XAI_API_KEY_ENV_VAR};
+
+    let required_key = "GROK_TEST_UNRESOLVED_AUX_KEY";
+    let _required_key = EnvGuard::unset(required_key);
+    let _global_key = EnvGuard::unset(XAI_API_KEY_ENV_VAR);
+    let _legacy_key = EnvGuard::unset(LEGACY_XAI_API_KEY_ENV_VAR);
+    let endpoints = EndpointsConfig::default();
+    let mut catalog = IndexMap::new();
+    catalog.insert(
+        "custom-aux".to_string(),
+        test_model_entry(
+            "custom-aux-model",
+            "http://127.0.0.1:8033/v1",
+            None,
+            Some(required_key),
+            None,
+        ),
+    );
+
+    let resolved = resolve_aux_model_sampling_config(
+        "custom-aux",
+        &catalog,
+        &endpoints,
+        None,
+        false,
+        None,
+        None,
+    );
+    assert!(
+        resolved.is_none(),
+        "a configured but unresolved env_key must not enable an unusable aux sampler"
+    );
+
+    let active = SamplerConfig {
+        model: "active-session-model".into(),
+        base_url: "http://127.0.0.1:9044/v1".into(),
+        api_key: Some("active-session-key".into()),
+        ..Default::default()
+    };
+    let (model, config) = finalize_image_describe_sampler_config(resolved, &active, None, None);
+    assert_eq!(model, "active-session-model");
+    assert_eq!(config.model, "active-session-model");
+    assert_eq!(config.base_url, "http://127.0.0.1:9044/v1");
+    assert_eq!(config.api_key.as_deref(), Some("active-session-key"));
+}
+// ZMY SELF-ADDED CODE END
 /// Cold cache falls back to the session model, never the xAI proxy; warm cache serves the provider token at the provider endpoint.
 #[tokio::test]
 async fn aux_model_with_auth_provider_never_reroutes() {

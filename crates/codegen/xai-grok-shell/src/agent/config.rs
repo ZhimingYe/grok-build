@@ -4558,6 +4558,14 @@ pub(crate) fn resolve_aux_model_sampling_config(
             );
             return None;
         }
+        if let Some(env_keys) = entry.env_key.as_ref().filter(|keys| !keys.is_empty()) {
+            tracing::warn!(
+                model = %model_id,
+                env_key = %env_keys,
+                "aux model requires an unset env_key; the caller falls back to its session default"
+            );
+            return None;
+        }
         return Some(sampler);
     }
     if xai_grok_env::is_official_service_url(&endpoints.resolve_inference_base_url()) {
