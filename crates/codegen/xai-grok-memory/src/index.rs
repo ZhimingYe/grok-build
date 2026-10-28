@@ -233,8 +233,9 @@ impl MemoryIndex {
                     .optional()?;
                 if stored_dims
                     .as_ref()
-                    .is_some_and(|stored| stored.parse::<usize>().ok() != Some(dimensions))
+                    .is_none_or(|stored| stored.parse::<usize>().ok() != Some(dimensions))
                 {
+                    // Missing dimension metadata cannot vouch for cached vectors.
                     transaction.execute("DROP TABLE IF EXISTS chunks_vec", [])?;
                 }
                 transaction.execute_batch(&schema::schema_sql(dimensions, true))?;
@@ -1597,6 +1598,159 @@ mod tests {
                 .optional()
                 .unwrap();
             assert_eq!(metadata_after_write.as_deref(), metadata);
+        }
+    }
+
+    #[test]
+    fn fork_missing_dimension_metadata_rebuilds_vectors_after_fts_edits() {
+        init_sqlite_vec();
+        for requested_dimensions in [4, 8] {
+            let tmp = TempDir::new().unwrap();
+            let db_path = tmp.path().join("missing-dimensions.sqlite");
+            let storage = test_storage(&tmp);
+            let edited_file = tmp.path().join("edited.md");
+            let deleted_file = tmp.path().join("deleted.md");
+            std::fs::write(&edited_file, "# Edited\n\noldcachedtoken").unwrap();
+            std::fs::write(&deleted_file, "# Deleted\n\ndeletedcachedtoken").unwrap();
+
+            let mut seeded = MemoryIndex::open_or_create(
+                &db_path,
+                storage.clone(),
+                MemoryIndexConfig::default(),
+                4,
+            )
+            .unwrap();
+            assert!(seeded.vec_available());
+            seeded.reindex_file(&edited_file, "workspace").unwrap();
+            seeded.reindex_file(&deleted_file, "workspace").unwrap();
+            let initial_chunks = seeded.chunks_without_embeddings().unwrap();
+            assert_eq!(initial_chunks.len(), 2);
+            let edited_id = format!("{}:0", edited_file.to_string_lossy());
+            let deleted_id = format!("{}:0", deleted_file.to_string_lossy());
+            for (chunk_id, _) in initial_chunks {
+                seeded
+                    .upsert_embedding(&chunk_id, &[0.25, 0.25, 0.25, 0.25])
+                    .unwrap();
+            }
+            drop(seeded);
+
+            let connection = rusqlite::Connection::open(&db_path).unwrap();
+            connection
+                .execute("DELETE FROM meta WHERE key = 'embedding_dimensions'", [])
+                .unwrap();
+            drop(connection);
+
+            let mut offline = MemoryIndex::open_or_create_preserving_dimensions(
+                &db_path,
+                storage.clone(),
+                MemoryIndexConfig::default(),
+                1024,
+            )
+            .unwrap();
+            assert!(!offline.vec_available());
+            std::fs::write(&edited_file, "# Edited\n\nreplacementcachedtoken").unwrap();
+            let edit_result = offline.reindex_file(&edited_file, "workspace").unwrap();
+            assert_eq!(edit_result.updated, 1);
+            assert_eq!(edit_result.added, 0);
+            assert!(
+                !offline
+                    .search_fts("replacementcachedtoken", 10)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(offline.search_fts("oldcachedtoken", 10).unwrap().is_empty());
+            assert_eq!(offline.delete_path(&deleted_file).unwrap(), 1);
+            assert!(
+                offline
+                    .search_fts("deletedcachedtoken", 10)
+                    .unwrap()
+                    .is_empty()
+            );
+
+            let mut statement = offline
+                .db()
+                .prepare("SELECT chunk_id FROM chunks_vec ORDER BY chunk_id")
+                .unwrap();
+            let cached_ids = statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            let mut expected_cached_ids = vec![edited_id.clone(), deleted_id.clone()];
+            expected_cached_ids.sort_unstable();
+            assert_eq!(cached_ids, expected_cached_ids);
+            let stored_dimensions: Option<String> = offline
+                .db()
+                .query_row(
+                    schema::GET_META_SQL,
+                    params!["embedding_dimensions"],
+                    |row| row.get(0),
+                )
+                .optional()
+                .unwrap();
+            assert_eq!(stored_dimensions, None);
+            drop(statement);
+            drop(offline);
+
+            let recovered = MemoryIndex::open_or_create(
+                &db_path,
+                storage,
+                MemoryIndexConfig::default(),
+                requested_dimensions,
+            )
+            .unwrap();
+            assert!(recovered.vec_available());
+            assert_eq!(recovered.embedding_dimensions(), requested_dimensions);
+            let missing = recovered.chunks_without_embeddings().unwrap();
+            assert_eq!(missing.len(), 1);
+            assert_eq!(missing[0].0, edited_id);
+            assert!(missing[0].1.contains("replacementcachedtoken"));
+            assert!(
+                !recovered
+                    .search_fts("replacementcachedtoken", 10)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(
+                recovered
+                    .search_fts("oldcachedtoken", 10)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(
+                recovered
+                    .search_fts("deletedcachedtoken", 10)
+                    .unwrap()
+                    .is_empty()
+            );
+            let vector_schema: String = recovered
+                .db()
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'chunks_vec'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(vector_schema.contains(&format!("FLOAT[{requested_dimensions}]")));
+            let cached_after_recovery: i64 = recovered
+                .db()
+                .query_row("SELECT COUNT(*) FROM chunks_vec", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(cached_after_recovery, 0);
+            let stored_dimensions: String = recovered
+                .db()
+                .query_row(
+                    schema::GET_META_SQL,
+                    params!["embedding_dimensions"],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(stored_dimensions, requested_dimensions.to_string());
+
+            recovered
+                .upsert_embedding(&edited_id, &vec![0.5; requested_dimensions])
+                .unwrap();
+            assert!(recovered.chunks_without_embeddings().unwrap().is_empty());
         }
     }
     // ZMY SELF-ADDED CODE END
